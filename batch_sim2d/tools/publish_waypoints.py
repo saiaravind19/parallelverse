@@ -26,8 +26,11 @@ import zmq
 def parse_waypoints(text):
     pts = []
     for token in text.replace(";", " ").split():
-        x_str, y_str = token.split(",")
-        pts.append([float(x_str), float(y_str)])
+        parts = token.split(",")
+        if len(parts) != 2:
+            raise ValueError(f"'{token}' is not an x,y pair; put a comma between x and y, "
+                             "and a space between points")
+        pts.append([float(parts[0]), float(parts[1])])
     if len(pts) > 32:
         raise ValueError("at most 32 waypoints per robot")
     return pts
