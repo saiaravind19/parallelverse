@@ -296,6 +296,11 @@ int main(int argc, char **argv)
             ImVec2 tip = toScreen(s.x + std::cos(s.theta) * 0.3f,
                                   s.y + std::sin(s.theta) * 0.3f);
             dl->AddLine(c, tip, IM_COL32(255, 255, 255, 255), 2.f);
+            char label[8];
+            std::snprintf(label, sizeof(label), "%d", r);
+            ImVec2 ts = ImGui::CalcTextSize(label);
+            dl->AddText(ImVec2(c.x - ts.x * 0.5f, c.y - rad - ts.y - 2.f),
+                        IM_COL32(255, 255, 255, 255), label);
         }
 
         ImGui::End();
