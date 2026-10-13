@@ -76,7 +76,7 @@ int main()
     {
         bs2d::Map m;
         std::string err;
-        if (!bs2d::loadMapCSV("../batch_sim2d/maps/layout_sample.csv", m, err)) {
+        if (!bs2d::loadMapCSV("../maps/layout_sample.csv", m, err)) {
             printf("layout load failed: %s\n", err.c_str());
             return 1;
         }

@@ -1,773 +1,288 @@
-#include <madrona/mw_gpu_entry.hpp>
-
 #include "sim.hpp"
-#include "level_gen.hpp"
+#include "profile.hpp"
 
-#include <algorithm>
+#include <madrona/components.hpp>
+#include <cmath>
+
+namespace sim2d {
 
 using namespace madrona;
-using namespace madrona::math;
-using namespace madrona::phys;
 
-namespace RenderingSystem = madrona::render::RenderingSystem;
+// ---------- helpers ----------
 
-namespace madEscape {
+static float wrapAngle(float a)
+{
+    const float pi = 3.14159265358979f;
+    while (a > pi) a -= 2.f * pi;
+    while (a < -pi) a += 2.f * pi;
+    return a;
+}
 
-// Register all the ECS components and archetypes that will be
-// used in the simulation
-void Sim::registerTypes(ECSRegistry &registry, const Config &cfg)
+// True if a circle of radius r centred at (x, y) overlaps any wall cell
+// or leaves the map.
+static bool circleHitsWall(const MapGrid &map, float x, float y, float r)
+{
+    int32_t x0 = (int32_t)std::floor(x - r - map.originX);
+    int32_t x1 = (int32_t)std::floor(x + r - map.originX);
+    int32_t y0 = (int32_t)std::floor(y - r - map.originY);
+    int32_t y1 = (int32_t)std::floor(y + r - map.originY);
+
+    if (x0 < 0 || y0 < 0 || x1 >= map.width || y1 >= map.height) {
+        return true;
+    }
+
+    for (int32_t cy = y0; cy <= y1; cy++) {
+        for (int32_t cx = x0; cx <= x1; cx++) {
+            if (!map.cells[cy * map.width + cx]) continue;
+
+            float minx = map.originX + cx, maxx = minx + 1.f;
+            float miny = map.originY + cy, maxy = miny + 1.f;
+            float qx = std::fmin(std::fmax(x, minx), maxx);
+            float qy = std::fmin(std::fmax(y, miny), maxy);
+            float dx = x - qx, dy = y - qy;
+            if (dx * dx + dy * dy < r * r) return true;
+        }
+    }
+    return false;
+}
+
+// ---------- systems ----------
+
+// Copy a new waypoint list into the robot's path when its sequence number
+// changes. A new command also clears the stopped / collided flags.
+inline void applyCommandSystem(Engine &,
+                               WaypointCmd &cmd,
+                               Path &path,
+                               RobotMotion &motion)
+{
+    if (!motion.active || cmd.seq == motion.cmdSeq) return;
+
+    motion.cmdSeq = cmd.seq;
+    motion.stopped = 0;
+    motion.collided = 0;
+    motion.hitRobot = 0;
+
+    path.count = cmd.count;
+    path.next = 0;
+    for (CountT i = 0; i < cmd.count; i++) {
+        path.pts[i] = cmd.pts[i];
+    }
+}
+
+// Trapezoidal speed profile plus differential-drive heading control.
+inline void driveSystem(Engine &ctx,
+                        RobotPose &pose,
+                        RobotParams &params,
+                        RobotMotion &motion,
+                        Path &path)
+{
+    if (!motion.active) return;
+
+    motion.prevX = pose.x;
+    motion.prevY = pose.y;
+
+    if (motion.stopped || path.next >= path.count) {
+        motion.v = 0.f;
+        return;
+    }
+
+    Vec2 goal = path.pts[path.next];
+    float dx = goal.x - pose.x;
+    float dy = goal.y - pose.y;
+    float dist = std::sqrt(dx * dx + dy * dy);
+
+    if (dist < 0.05f) {
+        path.next++;
+        motion.v = 0.f;
+        return;
+    }
+
+    float dt = ctx.data().dt;
+
+    // Turn toward the goal, limited by the turn-rate cap.
+    float desired = std::atan2(dy, dx);
+    float err = wrapAngle(desired - pose.theta);
+    float maxTurn = params.omegaMax * dt;
+    float turn = std::fmin(std::fmax(err, -maxTurn), maxTurn);
+    pose.theta = wrapAngle(pose.theta + turn);
+
+    // Drive along the trapezoid, but only once roughly facing the goal.
+    float speed = bs2d::trapezoidSpeed(dist, motion.v, params.vMax,
+                                       params.aMax, dt);
+    if (std::fabs(err) > 0.5f) speed = 0.f;
+    motion.v = speed;
+
+    float nx = pose.x + std::cos(pose.theta) * speed * dt;
+    float ny = pose.y + std::sin(pose.theta) * speed * dt;
+
+    const MapGrid &map = ctx.singleton<MapGrid>();
+    if (circleHitsWall(map, nx, ny, params.radius)) {
+        motion.stopped = 1;
+        motion.v = 0.f;
+        return;
+    }
+
+    pose.x = nx;
+    pose.y = ny;
+}
+
+// Flag this robot if its circle overlaps any other active robot's circle.
+// Only writes this robot's own flag, so it is race-free across robots.
+inline void detectCollisionSystem(Engine &ctx,
+                                  RobotPose &pose,
+                                  RobotParams &params,
+                                  RobotMotion &motion,
+                                  OtherRobots &others)
+{
+    motion.collided = 0;
+    if (!motion.active) return;
+
+    for (CountT i = 0; i < limits::maxRobotsPerWorld - 1; i++) {
+        Entity o = others.e[i];
+        if (!ctx.get<RobotMotion>(o).active) continue;
+
+        RobotPose op = ctx.get<RobotPose>(o);
+        RobotParams oparams = ctx.get<RobotParams>(o);
+        float dx = pose.x - op.x;
+        float dy = pose.y - op.y;
+        float rr = params.radius + oparams.radius;
+        if (dx * dx + dy * dy < rr * rr) {
+            motion.collided = 1;
+            return;
+        }
+    }
+}
+
+// Undo this step's move for any robot in contact, and stop it. Both robots
+// in a pair are flagged by detection, so both revert.
+inline void resolveCollisionSystem(Engine &,
+                                   RobotPose &pose,
+                                   RobotMotion &motion)
+{
+    if (!motion.active || !motion.collided) return;
+
+    pose.x = motion.prevX;
+    pose.y = motion.prevY;
+    motion.stopped = 1;
+    motion.hitRobot = 1;
+    motion.v = 0.f;
+}
+
+// Publish state for the host to read after each step.
+inline void statusSystem(Engine &,
+                         RobotPose &pose,
+                         RobotMotion &motion,
+                         Path &path,
+                         RobotState &state)
+{
+    state.x = pose.x;
+    state.y = pose.y;
+    state.theta = pose.theta;
+    state.v = motion.v;
+    state.next = path.next;
+    state.count = path.count;
+    state.stopped = motion.stopped;
+    state.collided = motion.collided;
+    state.hitRobot = motion.hitRobot;
+    state.active = motion.active;
+}
+
+// ---------- registration and task graph ----------
+
+void Sim::registerTypes(ECSRegistry &registry, const Config &)
 {
     base::registerTypes(registry);
-    phys::PhysicsSystem::registerTypes(registry);
 
-    RenderingSystem::registerTypes(registry, cfg.renderBridge);
+    registry.registerComponent<RobotPose>();
+    registry.registerComponent<RobotParams>();
+    registry.registerComponent<RobotMotion>();
+    registry.registerComponent<Path>();
+    registry.registerComponent<WaypointCmd>();
+    registry.registerComponent<RobotState>();
+    registry.registerComponent<OtherRobots>();
 
-    registry.registerComponent<Action>();
-    registry.registerComponent<SelfObservation>();
-    registry.registerComponent<Reward>();
-    registry.registerComponent<Done>();
-    registry.registerComponent<GrabState>();
-    registry.registerComponent<Progress>();
-    registry.registerComponent<OtherAgents>();
-    registry.registerComponent<PartnerObservations>();
-    registry.registerComponent<RoomEntityObservations>();
-    registry.registerComponent<DoorObservation>();
-    registry.registerComponent<ButtonState>();
-    registry.registerComponent<OpenState>();
-    registry.registerComponent<DoorProperties>();
-    registry.registerComponent<Lidar>();
-    registry.registerComponent<StepsRemaining>();
-    registry.registerComponent<EntityType>();
+    registry.registerSingleton<MapGrid>();
 
-    registry.registerSingleton<WorldReset>();
-    registry.registerSingleton<LevelState>();
+    registry.registerArchetype<Robot>();
 
-    registry.registerArchetype<Agent>();
-    registry.registerArchetype<PhysicsEntity>();
-    registry.registerArchetype<DoorEntity>();
-    registry.registerArchetype<ButtonEntity>();
-
-    registry.exportSingleton<WorldReset>(
-        (uint32_t)ExportID::Reset);
-    registry.exportColumn<Agent, Action>(
-        (uint32_t)ExportID::Action);
-    registry.exportColumn<Agent, SelfObservation>(
-        (uint32_t)ExportID::SelfObservation);
-    registry.exportColumn<Agent, PartnerObservations>(
-        (uint32_t)ExportID::PartnerObservations);
-    registry.exportColumn<Agent, RoomEntityObservations>(
-        (uint32_t)ExportID::RoomEntityObservations);
-    registry.exportColumn<Agent, DoorObservation>(
-        (uint32_t)ExportID::DoorObservation);
-    registry.exportColumn<Agent, Lidar>(
-        (uint32_t)ExportID::Lidar);
-    registry.exportColumn<Agent, StepsRemaining>(
-        (uint32_t)ExportID::StepsRemaining);
-    registry.exportColumn<Agent, Reward>(
-        (uint32_t)ExportID::Reward);
-    registry.exportColumn<Agent, Done>(
-        (uint32_t)ExportID::Done);
+    registry.exportColumn<Robot, WaypointCmd>(
+        (uint32_t)ExportID::WaypointCmd);
+    registry.exportColumn<Robot, RobotState>(
+        (uint32_t)ExportID::RobotState);
 }
 
-static inline void cleanupWorld(Engine &ctx)
-{
-    // Destroy current level entities
-    LevelState &level = ctx.singleton<LevelState>();
-    for (CountT i = 0; i < consts::numRooms; i++) {
-        Room &room = level.rooms[i];
-        for (CountT j = 0; j < consts::maxEntitiesPerRoom; j++) {
-            if (room.entities[j] != Entity::none()) {
-                ctx.destroyRenderableEntity(room.entities[j]);
-            }
-        }
-
-        ctx.destroyRenderableEntity(room.walls[0]);
-        ctx.destroyRenderableEntity(room.walls[1]);
-        ctx.destroyRenderableEntity(room.door);
-    }
-}
-
-static inline void initWorld(Engine &ctx)
-{
-    phys::PhysicsSystem::reset(ctx);
-
-    // Assign a new episode ID
-    ctx.data().rng = RNG(rand::split_i(ctx.data().initRandKey,
-        ctx.data().curWorldEpisode++, (uint32_t)ctx.worldID().idx));
-
-    // Defined in src/level_gen.hpp / src/level_gen.cpp
-    generateWorld(ctx);
-}
-
-// This system runs each frame and checks if the current episode is complete
-// or if code external to the application has forced a reset by writing to the
-// WorldReset singleton.
-//
-// If a reset is needed, cleanup the existing world and generate a new one.
-inline void resetSystem(Engine &ctx, WorldReset &reset)
-{
-    int32_t should_reset = reset.reset;
-    if (ctx.data().autoReset) {
-        for (CountT i = 0; i < consts::numAgents; i++) {
-            Entity agent = ctx.data().agents[i];
-            Done done = ctx.get<Done>(agent);
-            if (done.v) {
-                should_reset = 1;
-            }
-        }
-    }
-
-    if (should_reset != 0) {
-        reset.reset = 0;
-
-        cleanupWorld(ctx);
-        initWorld(ctx);
-    }
-}
-
-// Translates discrete actions from the Action component to forces
-// used by the physics simulation.
-inline void movementSystem(Engine &,
-                           Action &action, 
-                           Rotation &rot, 
-                           ExternalForce &external_force,
-                           ExternalTorque &external_torque)
-{
-    constexpr float move_max = 1000;
-    constexpr float turn_max = 320;
-
-    Quat cur_rot = rot;
-
-    float move_amount = action.moveAmount *
-        (move_max / (consts::numMoveAmountBuckets - 1));
-
-    constexpr float move_angle_per_bucket =
-        2.f * math::pi / float(consts::numMoveAngleBuckets);
-
-    float move_angle = float(action.moveAngle) * move_angle_per_bucket;
-
-    float f_x = move_amount * sinf(move_angle);
-    float f_y = move_amount * cosf(move_angle);
-
-    constexpr float turn_delta_per_bucket = 
-        turn_max / (consts::numTurnBuckets / 2);
-    float t_z =
-        turn_delta_per_bucket * (action.rotate - consts::numTurnBuckets / 2);
-
-    external_force = cur_rot.rotateVec({ f_x, f_y, 0 });
-    external_torque = Vector3 { 0, 0, t_z };
-}
-
-// Implements the grab action by casting a short ray in front of the agent
-// and creating a joint constraint if a grabbable entity is hit.
-inline void grabSystem(Engine &ctx,
-                       Entity e,
-                       Position pos,
-                       Rotation rot,
-                       Action action,
-                       GrabState &grab)
-{
-    if (action.grab == 0) {
-        return;
-    }
-
-    // if a grab is currently in progress, triggering the grab action
-    // just releases the object
-    if (grab.constraintEntity != Entity::none()) {
-        ctx.destroyEntity(grab.constraintEntity);
-        grab.constraintEntity = Entity::none();
-        
-        return;
-    } 
-
-    // Get the per-world BVH singleton component
-    auto &bvh = ctx.singleton<broadphase::BVH>();
-    float hit_t;
-    Vector3 hit_normal;
-
-    Vector3 ray_o = pos + 0.5f * math::up;
-    Vector3 ray_d = rot.rotateVec(math::fwd);
-
-    Entity grab_entity =
-        bvh.traceRay(ray_o, ray_d, &hit_t, &hit_normal, 2.0f);
-
-    if (grab_entity == Entity::none()) {
-        return;
-    }
-
-    auto response_type = ctx.get<ResponseType>(grab_entity);
-    if (response_type != ResponseType::Dynamic) {
-        return;
-    }
-
-    auto entity_type = ctx.get<EntityType>(grab_entity);
-    if (entity_type == EntityType::Agent) {
-        return;
-    }
-
-    Vector3 other_pos = ctx.get<Position>(grab_entity);
-    Quat other_rot = ctx.get<Rotation>(grab_entity);
-
-    Vector3 r1 = 1.25f * math::fwd + 0.5f * math::up;
-
-    Vector3 hit_pos = ray_o + ray_d * hit_t;
-    Vector3 r2 =
-        other_rot.inv().rotateVec(hit_pos - other_pos);
-
-    Quat attach1 = { 1, 0, 0, 0 };
-    Quat attach2 = (other_rot.inv() * rot).normalize();
-
-    float separation = hit_t - 1.25f;
-
-    grab.constraintEntity = PhysicsSystem::makeFixedJoint(ctx,
-        e, grab_entity, attach1, attach2, r1, r2, separation);
-}
-
-// Animates the doors opening and closing based on OpenState
-inline void setDoorPositionSystem(Engine &,
-                                  Position &pos,
-                                  OpenState &open_state)
-{
-    if (open_state.isOpen) {
-        // Put underground
-        if (pos.z > -4.5f) {
-            pos.z += -consts::doorSpeed * consts::deltaT;
-        }
-    }
-    else if (pos.z < 0.0f) {
-        // Put back on surface
-        pos.z += consts::doorSpeed * consts::deltaT;
-    }
-    
-    if (pos.z >= 0.0f) {
-        pos.z = 0.0f;
-    }
-}
-
-
-// Checks if there is an entity standing on the button and updates
-// ButtonState if so.
-inline void buttonSystem(Engine &ctx,
-                         Position pos,
-                         ButtonState &state)
-{
-    AABB button_aabb {
-        .pMin = pos + Vector3 { 
-            -consts::buttonWidth / 2.f, 
-            -consts::buttonWidth / 2.f,
-            0.f,
-        },
-        .pMax = pos + Vector3 { 
-            consts::buttonWidth / 2.f, 
-            consts::buttonWidth / 2.f,
-            0.25f
-        },
-    };
-
-    bool button_pressed = false;
-    PhysicsSystem::findEntitiesWithinAABB(
-            ctx, button_aabb, [&](Entity) {
-        button_pressed = true;
-    });
-
-    state.isPressed = button_pressed;
-}
-
-// Check if all the buttons linked to the door are pressed and open if so.
-// Optionally, close the door if the buttons aren't pressed.
-inline void doorOpenSystem(Engine &ctx,
-                           OpenState &open_state,
-                           const DoorProperties &props)
-{
-    bool all_pressed = true;
-    for (int32_t i = 0; i < props.numButtons; i++) {
-        Entity button = props.buttons[i];
-        all_pressed = all_pressed && ctx.get<ButtonState>(button).isPressed;
-    }
-
-    if (all_pressed) {
-        open_state.isOpen = true;
-    } else if (!props.isPersistent) {
-        open_state.isOpen = false;
-    }
-}
-
-// Make the agents easier to control by zeroing out their velocity
-// after each step.
-inline void agentZeroVelSystem(Engine &,
-                               Velocity &vel,
-                               Action &)
-{
-    vel.linear.x = 0;
-    vel.linear.y = 0;
-    vel.linear.z = fminf(vel.linear.z, 0);
-
-    vel.angular = Vector3::zero();
-}
-
-static inline float distObs(float v)
-{
-    return v / consts::worldLength;
-}
-
-static inline float globalPosObs(float v)
-{
-    return v / consts::worldLength;
-}
-
-static inline float angleObs(float v)
-{
-    return v / math::pi;
-}
-
-// Translate xy delta to polar observations for learning.
-static inline PolarObservation xyToPolar(Vector3 v)
-{
-    Vector2 xy { v.x, v.y };
-
-    float r = xy.length();
-
-    // Note that this is angle off y-forward
-    float theta = atan2f(xy.x, xy.y);
-
-    return PolarObservation {
-        .r = distObs(r),
-        .theta = angleObs(theta),
-    };
-}
-
-static inline float encodeType(EntityType type)
-{
-    return (float)type / (float)EntityType::NumTypes;
-}
-
-static inline float computeZAngle(Quat q)
-{
-    float siny_cosp = 2.f * (q.w * q.z + q.x * q.y);
-    float cosy_cosp = 1.f - 2.f * (q.y * q.y + q.z * q.z);
-    return atan2f(siny_cosp, cosy_cosp);
-}
-
-// This system packages all the egocentric observations together 
-// for the policy inputs.
-inline void collectObservationsSystem(Engine &ctx,
-                                      Position pos,
-                                      Rotation rot,
-                                      const Progress &progress,
-                                      const GrabState &grab,
-                                      const OtherAgents &other_agents,
-                                      SelfObservation &self_obs,
-                                      PartnerObservations &partner_obs,
-                                      RoomEntityObservations &room_ent_obs,
-                                      DoorObservation &door_obs)
-{
-    CountT cur_room_idx = CountT(pos.y / consts::roomLength);
-    cur_room_idx = std::max(CountT(0), 
-        std::min(consts::numRooms - 1, cur_room_idx));
-
-    self_obs.roomX = pos.x / (consts::worldWidth / 2.f);
-    self_obs.roomY = (pos.y - cur_room_idx * consts::roomLength) /
-        consts::roomLength;
-    self_obs.globalX = globalPosObs(pos.x);
-    self_obs.globalY = globalPosObs(pos.y);
-    self_obs.globalZ = globalPosObs(pos.z);
-    self_obs.maxY = globalPosObs(progress.maxY);
-    self_obs.theta = angleObs(computeZAngle(rot));
-    self_obs.isGrabbing = grab.constraintEntity != Entity::none() ?
-        1.f : 0.f;
-
-    Quat to_view = rot.inv();
-
-#pragma unroll
-    for (CountT i = 0; i < consts::numAgents - 1; i++) {
-        Entity other = other_agents.e[i];
-
-        Vector3 other_pos = ctx.get<Position>(other);
-        GrabState other_grab = ctx.get<GrabState>(other);
-        Vector3 to_other = other_pos - pos;
-
-        partner_obs.obs[i] = {
-            .polar = xyToPolar(to_view.rotateVec(to_other)),
-            .isGrabbing = other_grab.constraintEntity != Entity::none() ?
-                1.f : 0.f,
-        };
-    }
-
-    const LevelState &level = ctx.singleton<LevelState>();
-    const Room &room = level.rooms[cur_room_idx];
-
-    for (CountT i = 0; i < consts::maxEntitiesPerRoom; i++) {
-        Entity entity = room.entities[i];
-
-        EntityObservation ob;
-        if (entity == Entity::none()) {
-            ob.polar = { 0.f, 1.f };
-            ob.encodedType = encodeType(EntityType::None);
-        } else {
-            Vector3 entity_pos = ctx.get<Position>(entity);
-            EntityType entity_type = ctx.get<EntityType>(entity);
-
-            Vector3 to_entity = entity_pos - pos;
-            ob.polar = xyToPolar(to_view.rotateVec(to_entity));
-            ob.encodedType = encodeType(entity_type);
-        }
-
-        room_ent_obs.obs[i] = ob;
-    }
-
-    Entity cur_door = room.door;
-    Vector3 door_pos = ctx.get<Position>(cur_door);
-    OpenState door_open_state = ctx.get<OpenState>(cur_door);
-
-    door_obs.polar = xyToPolar(to_view.rotateVec(door_pos - pos));
-    door_obs.isOpen = door_open_state.isOpen ? 1.f : 0.f;
-}
-
-// Launches consts::numLidarSamples per agent.
-// This system is specially optimized in the GPU version:
-// a warp of threads is dispatched for each invocation of the system
-// and each thread in the warp traces one lidar ray for the agent.
-inline void lidarSystem(Engine &ctx,
-                        Entity e,
-                        Lidar &lidar)
-{
-    Vector3 pos = ctx.get<Position>(e);
-    Quat rot = ctx.get<Rotation>(e);
-    auto &bvh = ctx.singleton<broadphase::BVH>();
-
-    Vector3 agent_fwd = rot.rotateVec(math::fwd);
-    Vector3 right = rot.rotateVec(math::right);
-
-    auto traceRay = [&](int32_t idx) {
-        float theta = 2.f * math::pi * (
-            float(idx) / float(consts::numLidarSamples)) + math::pi / 2.f;
-        float x = cosf(theta);
-        float y = sinf(theta);
-
-        Vector3 ray_dir = (x * right + y * agent_fwd).normalize();
-
-        float hit_t;
-        Vector3 hit_normal;
-        Entity hit_entity =
-            bvh.traceRay(pos + 0.5f * math::up, ray_dir, &hit_t,
-                         &hit_normal, 200.f);
-
-        if (hit_entity == Entity::none()) {
-            lidar.samples[idx] = {
-                .depth = 0.f,
-                .encodedType = encodeType(EntityType::None),
-            };
-        } else {
-            EntityType entity_type = ctx.get<EntityType>(hit_entity);
-
-            lidar.samples[idx] = {
-                .depth = distObs(hit_t),
-                .encodedType = encodeType(entity_type),
-            };
-        }
-    };
-
-
-    // MADRONA_GPU_MODE guards GPU specific logic
-#ifdef MADRONA_GPU_MODE
-    // Can use standard cuda variables like threadIdx for 
-    // warp level programming
-    int32_t idx = threadIdx.x % 32;
-
-    if (idx < consts::numLidarSamples) {
-        traceRay(idx);
-    }
-#else
-    for (CountT i = 0; i < consts::numLidarSamples; i++) {
-        traceRay(i);
-    }
-#endif
-}
-
-// Computes reward for each agent and keeps track of the max distance achieved
-// so far through the challenge. Continuous reward is provided for any new
-// distance achieved.
-inline void rewardSystem(Engine &,
-                         Position pos,
-                         Progress &progress,
-                         Reward &out_reward)
-{
-    // Just in case agents do something crazy, clamp total reward
-    float reward_pos = fminf(pos.y, consts::worldLength * 2);
-
-    float old_max_y = progress.maxY;
-
-    float new_progress = reward_pos - old_max_y;
-
-    float reward;
-    if (new_progress > 0) {
-        reward = new_progress * consts::rewardPerDist;
-        progress.maxY = reward_pos;
-    } else {
-        reward = consts::slackReward;
-    }
-
-    out_reward.v = reward;
-}
-
-// Each agent gets a small bonus to it's reward if the other agent has
-// progressed a similar distance, to encourage them to cooperate.
-// This system reads the values of the Progress component written by
-// rewardSystem for other agents, so it must run after.
-inline void bonusRewardSystem(Engine &ctx,
-                              OtherAgents &others,
-                              Progress &progress,
-                              Reward &reward)
-{
-    bool partners_close = true;
-    for (CountT i = 0; i < consts::numAgents - 1; i++) {
-        Entity other = others.e[i];
-        Progress other_progress = ctx.get<Progress>(other);
-
-        if (fabsf(other_progress.maxY - progress.maxY) > 2.f) {
-            partners_close = false;
-        }
-    }
-
-    if (partners_close && reward.v > 0.f) {
-        reward.v *= 1.25f;
-    }
-}
-
-// Keep track of the number of steps remaining in the episode and
-// notify training that an episode has completed by
-// setting done = 1 on the final step of the episode
-inline void stepTrackerSystem(Engine &,
-                              StepsRemaining &steps_remaining,
-                              Done &done)
-{
-    int32_t num_remaining = --steps_remaining.t;
-    if (num_remaining == consts::episodeLen - 1) {
-        done.v = 0;
-    } else if (num_remaining == 0) {
-        done.v = 1;
-    }
-
-}
-
-// Helper function for sorting nodes in the taskgraph.
-// Sorting is only supported / required on the GPU backend,
-// since the CPU backend currently keeps separate tables for each world.
-// This will likely change in the future with sorting required for both
-// environments
-#ifdef MADRONA_GPU_MODE
-template <typename ArchetypeT>
-TaskGraph::NodeID queueSortByWorld(TaskGraph::Builder &builder,
-                                   Span<const TaskGraph::NodeID> deps)
-{
-    auto sort_sys =
-        builder.addToGraph<SortArchetypeNode<ArchetypeT, WorldID>>(
-            deps);
-    auto post_sort_reset_tmp =
-        builder.addToGraph<ResetTmpAllocNode>({sort_sys});
-
-    return post_sort_reset_tmp;
-}
-#endif
-
-// Build the task graph
-void Sim::setupTasks(TaskGraphManager &taskgraph_mgr, const Config &cfg)
+void Sim::setupTasks(TaskGraphManager &taskgraph_mgr, const Config &)
 {
     TaskGraphBuilder &builder = taskgraph_mgr.init(TaskGraphID::Step);
 
-    // Turn policy actions into movement
-    auto move_sys = builder.addToGraph<ParallelForNode<Engine,
-        movementSystem,
-            Action,
-            Rotation,
-            ExternalForce,
-            ExternalTorque
+    auto apply = builder.addToGraph<ParallelForNode<Engine,
+        applyCommandSystem,
+            WaypointCmd, Path, RobotMotion
         >>({});
 
-    // Scripted door behavior
-    auto set_door_pos_sys = builder.addToGraph<ParallelForNode<Engine,
-        setDoorPositionSystem,
-            Position,
-            OpenState
-        >>({move_sys});
+    auto drive = builder.addToGraph<ParallelForNode<Engine,
+        driveSystem,
+            RobotPose, RobotParams, RobotMotion, Path
+        >>({apply});
 
-    // Build BVH for broadphase / raycasting
-    auto broadphase_setup_sys = phys::PhysicsSystem::setupBroadphaseTasks(
-        builder, {set_door_pos_sys});
+    auto detect = builder.addToGraph<ParallelForNode<Engine,
+        detectCollisionSystem,
+            RobotPose, RobotParams, RobotMotion, OtherRobots
+        >>({drive});
 
-    // Grab action, post BVH build to allow raycasting
-    auto grab_sys = builder.addToGraph<ParallelForNode<Engine,
-        grabSystem,
-            Entity,
-            Position,
-            Rotation,
-            Action,
-            GrabState
-        >>({broadphase_setup_sys});
+    auto resolve = builder.addToGraph<ParallelForNode<Engine,
+        resolveCollisionSystem,
+            RobotPose, RobotMotion
+        >>({detect});
 
-    // Physics collision detection and solver
-    auto substep_sys = phys::PhysicsSystem::setupPhysicsStepTasks(builder,
-        {grab_sys}, consts::numPhysicsSubsteps);
-
-    // Improve controllability of agents by setting their velocity to 0
-    // after physics is done.
-    auto agent_zero_vel = builder.addToGraph<ParallelForNode<Engine,
-        agentZeroVelSystem, Velocity, Action>>(
-            {substep_sys});
-
-    // Finalize physics subsystem work
-    auto phys_done = phys::PhysicsSystem::setupCleanupTasks(
-        builder, {agent_zero_vel});
-
-    // Check buttons
-    auto button_sys = builder.addToGraph<ParallelForNode<Engine,
-        buttonSystem,
-            Position,
-            ButtonState
-        >>({phys_done});
-
-    // Set door to start opening if button conditions are met
-    auto door_open_sys = builder.addToGraph<ParallelForNode<Engine,
-        doorOpenSystem,
-            OpenState,
-            DoorProperties
-        >>({button_sys});
-
-    // Compute initial reward now that physics has updated the world state
-    auto reward_sys = builder.addToGraph<ParallelForNode<Engine,
-         rewardSystem,
-            Position,
-            Progress,
-            Reward
-        >>({door_open_sys});
-
-    // Assign partner's reward
-    auto bonus_reward_sys = builder.addToGraph<ParallelForNode<Engine,
-         bonusRewardSystem,
-            OtherAgents,
-            Progress,
-            Reward
-        >>({reward_sys});
-
-    // Check if the episode is over
-    auto done_sys = builder.addToGraph<ParallelForNode<Engine,
-        stepTrackerSystem,
-            StepsRemaining,
-            Done
-        >>({bonus_reward_sys});
-
-    // Conditionally reset the world if the episode is over
-    auto reset_sys = builder.addToGraph<ParallelForNode<Engine,
-        resetSystem,
-            WorldReset
-        >>({done_sys});
-
-    auto clear_tmp = builder.addToGraph<ResetTmpAllocNode>({reset_sys});
-    (void)clear_tmp;
-
-#ifdef MADRONA_GPU_MODE
-    // RecycleEntitiesNode is required on the GPU backend in order to reclaim
-    // deleted entity IDs.
-    auto recycle_sys = builder.addToGraph<RecycleEntitiesNode>({reset_sys});
-    (void)recycle_sys;
-#endif
-
-    // This second BVH build is a limitation of the current taskgraph API.
-    // It's only necessary if the world was reset, but we don't have a way
-    // to conditionally queue taskgraph nodes yet.
-    auto post_reset_broadphase = phys::PhysicsSystem::setupBroadphaseTasks(
-        builder, {reset_sys});
-
-    // Finally, collect observations for the next step.
-    auto collect_obs = builder.addToGraph<ParallelForNode<Engine,
-        collectObservationsSystem,
-            Position,
-            Rotation,
-            Progress,
-            GrabState,
-            OtherAgents,
-            SelfObservation,
-            PartnerObservations,
-            RoomEntityObservations,
-            DoorObservation
-        >>({post_reset_broadphase});
-
-    // The lidar system
-#ifdef MADRONA_GPU_MODE
-    // Note the use of CustomParallelForNode to create a taskgraph node
-    // that launches a warp of threads (32) for each invocation (1).
-    // The 32, 1 parameters could be changed to 32, 32 to create a system
-    // that cooperatively processes 32 entities within a warp.
-    auto lidar = builder.addToGraph<CustomParallelForNode<Engine,
-        lidarSystem, 32, 1,
-#else
-    auto lidar = builder.addToGraph<ParallelForNode<Engine,
-        lidarSystem,
-#endif
-            Entity,
-            Lidar
-        >>({post_reset_broadphase});
-
-    if (cfg.renderBridge) {
-        RenderingSystem::setupTasks(builder, {reset_sys});
-    }
-
-#ifdef MADRONA_GPU_MODE
-    // Sort entities, this could be conditional on reset like the second
-    // BVH build above.
-    auto sort_agents = queueSortByWorld<Agent>(
-        builder, {lidar, collect_obs});
-    auto sort_phys_objects = queueSortByWorld<PhysicsEntity>(
-        builder, {sort_agents});
-    auto sort_buttons = queueSortByWorld<ButtonEntity>(
-        builder, {sort_phys_objects});
-    auto sort_walls = queueSortByWorld<DoorEntity>(
-        builder, {sort_buttons});
-    (void)sort_walls;
-#else
-    (void)lidar;
-    (void)collect_obs;
-#endif
+    builder.addToGraph<ParallelForNode<Engine,
+        statusSystem,
+            RobotPose, RobotMotion, Path, RobotState
+        >>({resolve});
 }
 
-Sim::Sim(Engine &ctx,
-         const Config &cfg,
-         const WorldInit &)
+// ---------- construction ----------
+
+Sim::Sim(Engine &ctx, const Config &cfg, const WorldInit &init)
     : WorldBase(ctx)
 {
-    // Currently the physics system needs an upper bound on the number of
-    // entities that will be stored in the BVH. We plan to fix this in
-    // a future release.
-    constexpr CountT max_total_entities = consts::numAgents +
-        consts::numRooms * (consts::maxEntitiesPerRoom + 3) +
-        4; // side walls + floor
+    dt = cfg.dt;
 
-    phys::PhysicsSystem::init(ctx, cfg.rigidBodyObjMgr,
-        consts::deltaT, consts::numPhysicsSubsteps, -9.8f * math::up,
-        max_total_entities);
+    ctx.singleton<MapGrid>() = init.map;
 
-    initRandKey = cfg.initRandKey;
-    autoReset = cfg.autoReset;
-
-    enableRender = cfg.renderBridge != nullptr;
-
-    if (enableRender) {
-        RenderingSystem::init(ctx, cfg.renderBridge);
+    // Create a fixed number of slots per world so exported buffers have a
+    // stable shape. Unused slots have active = 0.
+    Entity robots[limits::maxRobotsPerWorld];
+    for (CountT i = 0; i < limits::maxRobotsPerWorld; i++) {
+        robots[i] = ctx.makeEntity<Robot>();
     }
 
-    curWorldEpisode = 0;
+    for (CountT i = 0; i < limits::maxRobotsPerWorld; i++) {
+        Entity e = robots[i];
+        const Sim::RobotSpawn &s = init.spawns[i];
 
-    // Creates agents, walls, etc.
-    createPersistentEntities(ctx);
+        ctx.get<RobotPose>(e) = RobotPose { s.x, s.y, s.theta };
+        ctx.get<RobotParams>(e) = RobotParams {
+            s.radius, s.vMax, s.aMax, s.omegaMax };
 
-    // Generate initial world state
-    initWorld(ctx);
+        RobotMotion motion {};
+        motion.v = 0.f;
+        motion.prevX = s.x;
+        motion.prevY = s.y;
+        motion.active = s.active;
+        ctx.get<RobotMotion>(e) = motion;
+
+        ctx.get<Path>(e) = Path {};
+        ctx.get<WaypointCmd>(e) = WaypointCmd {};
+        ctx.get<RobotState>(e) = RobotState {};
+
+        OtherRobots others {};
+        CountT k = 0;
+        for (CountT j = 0; j < limits::maxRobotsPerWorld; j++) {
+            if (j != i) others.e[k++] = robots[j];
+        }
+        ctx.get<OtherRobots>(e) = others;
+    }
 }
-
-// This declaration is needed for the GPU backend in order to generate the
-// CUDA kernel for world initialization, which needs to be specialized to the
-// application's world data type (Sim) and config and initialization types.
-// On the CPU it is a no-op.
-MADRONA_BUILD_MWGPU_ENTRY(Engine, Sim, Sim::Config, Sim::WorldInit);
 
 }

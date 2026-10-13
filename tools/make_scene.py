@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a batch_sim2d scene JSON for one layout CSV.
+"""Generate a sim2d scene JSON for one layout CSV.
 
     python3 make_scene.py          opens a window (needs PyQt5 or PyQt6)
     python3 make_scene.py --cli    asks for the layout path and robot count

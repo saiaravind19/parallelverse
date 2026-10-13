@@ -27,12 +27,12 @@ file next to the CSV, which `sim2d_app` can open.
    python3 make_scene.py --cli
    ```
 
-   The window needs PyQt5 or PyQt6. With uv, from the `batch_sim2d/tools` folder: `uv run make_scene.py`.
+   The window needs PyQt5 or PyQt6. With uv, from the `tools` folder: `uv run make_scene.py`.
 
 3. In `--cli` mode it asks two questions:
 
    ```
-   Layout CSV path: /Users/you/projects/madrona_escape_room/batch_sim2d/maps/layout_sample.csv
+   Layout CSV path: /Users/you/projects/multi_world_sim/maps/layout_sample.csv
    Number of robots: 3
    ```
 
