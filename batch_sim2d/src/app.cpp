@@ -306,7 +306,7 @@ int main(int argc, char **argv)
 
         ImGui::SetNextWindowPos(ImVec2(300, 10), ImGuiCond_Once);
         ImGui::SetNextWindowSize(ImVec2(kWinW - 310, kWinH - 20), ImGuiCond_Once);
-        ImGui::Begin("Map");
+        ImGui::Begin("Map", nullptr, ImGuiWindowFlags_NoCollapse);
         if (ImGui::BeginTabBar("worlds")) {
             for (uint32_t w = 0; w < nW; w++) {
                 if (ImGui::BeginTabItem(names[w].c_str())) {
