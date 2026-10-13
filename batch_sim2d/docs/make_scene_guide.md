@@ -12,13 +12,24 @@ file next to the CSV, which `sim2d_app` can open.
 ## Steps
 
 1. Put `make_scene.py` in any folder, for example next to your CSV.
-2. Run it:
+2. Run it. A window opens:
 
    ```
    python3 make_scene.py
    ```
 
-3. It asks two questions:
+   Click "Choose layout CSV...", pick the robot count, then click "Generate scene".
+   The window shows the scene path and the command to run.
+
+   To use terminal prompts instead, add `--cli`:
+
+   ```
+   python3 make_scene.py --cli
+   ```
+
+   The window needs PyQt5 or PyQt6. With uv, from the `batch_sim2d/tools` folder: `uv run make_scene.py`.
+
+3. In `--cli` mode it asks two questions:
 
    ```
    Layout CSV path: /Users/you/projects/madrona_escape_room/batch_sim2d/maps/layout_sample.csv

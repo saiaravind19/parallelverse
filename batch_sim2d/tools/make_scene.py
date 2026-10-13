@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Generate a batch_sim2d scene JSON for one layout CSV.
 
-Run it, type the layout path and the number of robots, and it writes
-<layout_name>_scene.json next to the CSV file.
+    python3 make_scene.py          opens a window (needs PyQt5 or PyQt6)
+    python3 make_scene.py --cli    asks for the layout path and robot count
+
+Either way it writes <layout_name>_scene.json next to the CSV file.
 
 Cell rules (same as the simulator):
   "(a,b,c,d)" or "0"  -> drivable
   "" or "1"           -> wall
   other text          -> ignored (legend, labels)
 """
+import argparse
 import csv
 import json
 import os
@@ -120,12 +123,11 @@ def write_scene(layout, count):
     return out_path, width, height, len(free)
 
 
-def main():
+def main_cli():
     layout = input("Layout CSV path: ").strip().strip('"').strip("'")
     layout = os.path.expanduser(layout)
     if not os.path.isfile(layout):
         sys.exit(f"File not found: {layout}")
-
     try:
         count = int(input("Number of robots: ").strip())
     except ValueError:
@@ -137,6 +139,100 @@ def main():
     print(f"Wrote {out_path}")
     print(f"Map {width} x {height} cells, {n_free} drivable, {count} robot(s).")
     print(f"Run: ./sim2d_app \"{out_path}\"")
+
+
+try:
+    try:
+        from PyQt5.QtWidgets import (QApplication, QFileDialog, QFormLayout,
+                                     QLabel, QMainWindow, QPushButton,
+                                     QSpinBox, QVBoxLayout, QWidget)
+        _QT_EXEC = "exec_"
+    except ImportError:
+        from PyQt6.QtWidgets import (QApplication, QFileDialog, QFormLayout,
+                                     QLabel, QMainWindow, QPushButton,
+                                     QSpinBox, QVBoxLayout, QWidget)
+        _QT_EXEC = "exec"
+    HAVE_QT = True
+except ImportError:
+    HAVE_QT = False
+
+
+if HAVE_QT:
+    class MakeSceneWindow(QMainWindow):
+        def __init__(self):
+            super().__init__()
+            self.setWindowTitle("make_scene")
+            self.resize(560, 220)
+            self.layout_path = ""
+
+            self.path_label = QLabel("No layout chosen")
+            self.path_label.setWordWrap(True)
+            browse = QPushButton("Choose layout CSV...")
+            browse.clicked.connect(self.choose_layout)
+
+            self.robots = QSpinBox()
+            self.robots.setRange(1, MAX_ROBOTS)
+            self.robots.setValue(3)
+
+            generate = QPushButton("Generate scene")
+            generate.clicked.connect(self.generate)
+
+            self.status = QLabel("")
+            self.status.setWordWrap(True)
+
+            form = QFormLayout()
+            form.addRow("Layout:", browse)
+            form.addRow("", self.path_label)
+            form.addRow("Robots:", self.robots)
+
+            root = QVBoxLayout()
+            root.addLayout(form)
+            root.addWidget(generate)
+            root.addWidget(self.status)
+            root.addStretch(1)
+
+            central = QWidget()
+            central.setLayout(root)
+            self.setCentralWidget(central)
+
+        def choose_layout(self):
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Choose layout CSV", "", "CSV files (*.csv);;All files (*)")
+            if path:
+                self.layout_path = path
+                self.path_label.setText(path)
+                self.status.setText("")
+
+        def generate(self):
+            if not self.layout_path or not os.path.isfile(self.layout_path):
+                self.status.setText("Choose a layout CSV first.")
+                return
+            try:
+                out, w, h, n_free = write_scene(self.layout_path, self.robots.value())
+            except ValueError as e:
+                self.status.setText(f"Could not make the scene: {e}")
+                return
+            self.status.setText(
+                f"Wrote {out}\nMap {w} x {h} cells, {n_free} drivable, "
+                f"{self.robots.value()} robot(s).\n"
+                f"Run: ./sim2d_app \"{out}\"")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Make a sim2d scene from a layout CSV.")
+    parser.add_argument("--cli", action="store_true",
+                        help="use terminal prompts instead of the window")
+    args = parser.parse_args()
+    if args.cli or not HAVE_QT:
+        if not args.cli:
+            print("PyQt5/PyQt6 not found; using terminal prompts. "
+                  "Install PyQt5 for the window.")
+        main_cli()
+        return
+    app = QApplication(sys.argv)
+    win = MakeSceneWindow()
+    win.show()
+    sys.exit(getattr(app, _QT_EXEC)())
 
 
 if __name__ == "__main__":
