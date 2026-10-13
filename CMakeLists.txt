@@ -8,5 +8,9 @@ include(setup)
 include(dependencies)
 
 add_subdirectory(external)
-add_subdirectory(src)
+# The original Madrona escape-room demo (3D, with lidar). Not used by sim2d.
+option(BUILD_ESCAPE_ROOM "Build the original escape room demo" OFF)
+if(BUILD_ESCAPE_ROOM)
+    add_subdirectory(src)
+endif()
 add_subdirectory(batch_sim2d)
