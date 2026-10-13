@@ -13,7 +13,7 @@ using madrona::CountT;
 // Limits fixed at compile time so that every world has the same table shape
 // (required by Madrona's exported buffers).
 namespace limits {
-inline constexpr CountT maxRobotsPerWorld = 16;
+inline constexpr CountT maxRobotsPerWorld = 128;
 inline constexpr CountT maxWaypoints = 32;
 inline constexpr int32_t maxMapDim = 128; // cells per side
 }
