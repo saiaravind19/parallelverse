@@ -98,13 +98,24 @@ def pick_spawns(width, height, free, count):
 
 
 def write_scene(layout, count):
-    """Write <layout>_scene.json next to the CSV. Returns (out_path, width, height, n_free)."""
+    """Write the scene JSON and return (out_path, width, height, n_free).
+
+    The scene goes in a scenes/ folder beside the maps/ folder when the CSV is
+    in maps/ (the layout used by the sample scenes). Otherwise it goes next to
+    the CSV. The map path in the scene is relative to the scene file.
+    """
     width, height, free = load_layout(layout)
     spawns = pick_spawns(width, height, free, count)
 
-    out_dir = os.path.dirname(os.path.abspath(layout))
-    stem = os.path.splitext(os.path.basename(layout))[0]
-    map_rel = os.path.basename(layout)  # same folder as the scene file
+    csv_abs = os.path.abspath(layout)
+    csv_dir = os.path.dirname(csv_abs)
+    stem = os.path.splitext(os.path.basename(csv_abs))[0]
+    if os.path.basename(csv_dir) == "maps":
+        scene_dir = os.path.join(os.path.dirname(csv_dir), "scenes")
+        os.makedirs(scene_dir, exist_ok=True)
+    else:
+        scene_dir = csv_dir
+    map_rel = os.path.relpath(csv_abs, scene_dir).replace(os.sep, "/")
 
     robots = [{
         "x": x + 0.5, "y": y + 0.5, "theta": 0.0,
@@ -116,7 +127,7 @@ def write_scene(layout, count):
         "worlds": [{"name": stem, "map": map_rel, "robots": robots}],
     }
 
-    out_path = os.path.join(out_dir, f"{stem}_scene.json")
+    out_path = os.path.join(scene_dir, f"{stem}_scene.json")
     with open(out_path, "w") as f:
         json.dump(scene, f, indent=2)
         f.write("\n")
