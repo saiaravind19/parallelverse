@@ -37,8 +37,16 @@ add_library(sim2d_imgui STATIC
 target_include_directories(sim2d_imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
 target_link_libraries(sim2d_imgui PUBLIC glfw OpenGL::GL)
 
+#  libzmq: find it on Linux and on Homebrew (Apple Silicon and Intel).
+find_path(ZMQ_INCLUDE_DIR zmq.h HINTS /opt/homebrew/include /usr/local/include /usr/include)
+find_library(ZMQ_LIBRARY zmq HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
+if(NOT ZMQ_INCLUDE_DIR OR NOT ZMQ_LIBRARY)
+    message(FATAL_ERROR "libzmq not found. Install it (macOS: brew install zeromq; Ubuntu: apt install libzmq3-dev)")
+endif()
+
 add_executable(sim2d_app src/app.cpp)
-target_link_libraries(sim2d_app PRIVATE sim2d_core sim2d_imgui zmq)
+target_include_directories(sim2d_app PRIVATE ${ZMQ_INCLUDE_DIR})
+target_link_libraries(sim2d_app PRIVATE sim2d_core sim2d_imgui ${ZMQ_LIBRARY})
 
 add_executable(sim2d_map_check src/map_check.cpp)
 target_link_libraries(sim2d_map_check PRIVATE sim2d_core)

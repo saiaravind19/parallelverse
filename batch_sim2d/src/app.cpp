@@ -6,6 +6,7 @@
 //   command SUB tcp://*:5556  topic "cmd"            JSON
 //           {"world":0,"robot":1,"waypoints":[[x,y],...]}
 
+#define GL_SILENCE_DEPRECATION
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
@@ -134,6 +135,13 @@ int main(int argc, char **argv)
         return 1;
     }
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+#ifdef __APPLE__
+    // macOS only offers OpenGL 3.2+ core profiles.
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+#endif
     GLFWwindow *window = glfwCreateWindow(kWinW, kWinH, "sim2d", nullptr, nullptr);
     if (!window) {
         fprintf(stderr, "could not create window (is DISPLAY set?)\n");
@@ -145,7 +153,11 @@ int main(int argc, char **argv)
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
+#ifdef __APPLE__
+    ImGui_ImplOpenGL3_Init("#version 150");
+#else
     ImGui_ImplOpenGL3_Init("#version 130");
+#endif
 
     bool playing = true;
     float speed = 1.f;
