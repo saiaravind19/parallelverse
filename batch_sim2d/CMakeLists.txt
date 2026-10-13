@@ -74,3 +74,6 @@ target_link_libraries(sim2d_app PRIVATE sim2d_msgs sim2d_core sim2d_imgui ${ZMQ_
 
 add_executable(sim2d_map_check src/map_check.cpp)
 target_link_libraries(sim2d_map_check PRIVATE sim2d_core)
+
+add_executable(sim2d_bench src/bench.cpp)
+target_link_libraries(sim2d_bench PRIVATE sim2d_core)
