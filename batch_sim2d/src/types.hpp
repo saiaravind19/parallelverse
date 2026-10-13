@@ -47,7 +47,7 @@ struct RobotPose {
 // Physical / control parameters, set from the config.
 struct RobotParams {
     float radius;    // circular footprint (m)
-    float vMax;      // m/s, configured range [0, 2]
+    float vMax;      // m/s, set per robot in the scene (must be > 0)
     float aMax;      // m/s^2, trapezoid acceleration limit
     float omegaMax;  // rad/s, turn-rate limit
 };

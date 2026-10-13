@@ -94,8 +94,8 @@ bool loadScene(const std::string &path, float &dt,
             s.omegaMax = rj.value("omegamax", 1.f);
             s.active = 1;
 
-            if (!(s.vMax > 0.f && s.vMax <= 2.f)) {
-                err = "vmax must be in (0, 2]";
+            if (!(s.vMax > 0.f)) {
+                err = "vmax must be greater than 0";
                 return false;
             }
             if (!(s.radius > 0.f) || !(s.aMax > 0.f) || !(s.omegaMax > 0.f)) {
