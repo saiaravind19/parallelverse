@@ -94,19 +94,8 @@ def pick_spawns(width, height, free, count):
     return chosen
 
 
-def main():
-    layout = input("Layout CSV path: ").strip().strip('"').strip("'")
-    layout = os.path.expanduser(layout)
-    if not os.path.isfile(layout):
-        sys.exit(f"File not found: {layout}")
-
-    try:
-        count = int(input("Number of robots: ").strip())
-    except ValueError:
-        sys.exit("Number of robots must be a whole number.")
-    if not 1 <= count <= MAX_ROBOTS:
-        sys.exit(f"Number of robots must be between 1 and {MAX_ROBOTS}.")
-
+def write_scene(layout, count):
+    """Write <layout>_scene.json next to the CSV. Returns (out_path, width, height, n_free)."""
     width, height, free = load_layout(layout)
     spawns = pick_spawns(width, height, free, count)
 
@@ -128,9 +117,25 @@ def main():
     with open(out_path, "w") as f:
         json.dump(scene, f, indent=2)
         f.write("\n")
+    return out_path, width, height, len(free)
 
+
+def main():
+    layout = input("Layout CSV path: ").strip().strip('"').strip("'")
+    layout = os.path.expanduser(layout)
+    if not os.path.isfile(layout):
+        sys.exit(f"File not found: {layout}")
+
+    try:
+        count = int(input("Number of robots: ").strip())
+    except ValueError:
+        sys.exit("Number of robots must be a whole number.")
+    if not 1 <= count <= MAX_ROBOTS:
+        sys.exit(f"Number of robots must be between 1 and {MAX_ROBOTS}.")
+
+    out_path, width, height, n_free = write_scene(layout, count)
     print(f"Wrote {out_path}")
-    print(f"Map {width} x {height} cells, {len(free)} drivable, {count} robot(s).")
+    print(f"Map {width} x {height} cells, {n_free} drivable, {count} robot(s).")
     print(f"Run: ./sim2d_app \"{out_path}\"")
 
 
