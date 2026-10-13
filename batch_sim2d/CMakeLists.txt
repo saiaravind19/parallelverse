@@ -1,3 +1,7 @@
+# Most robots one world can hold. Madrona needs fixed-size tables, so this is a
+# build-time capacity; a scene can use any count up to it.
+set(SIM2D_MAX_ROBOTS 512 CACHE STRING "Robots per world capacity")
+
 find_package(nlohmann_json 3.2 REQUIRED)
 
 add_library(sim2d_core STATIC
@@ -10,6 +14,7 @@ add_library(sim2d_core STATIC
 )
 
 target_include_directories(sim2d_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_definitions(sim2d_core PUBLIC SIM2D_MAX_ROBOTS=${SIM2D_MAX_ROBOTS})
 
 target_link_libraries(sim2d_core
     PUBLIC

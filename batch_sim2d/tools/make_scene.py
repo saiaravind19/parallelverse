@@ -22,7 +22,7 @@ RADIUS = 0.3
 VMAX = 2.0
 AMAX = 1.0
 OMEGAMAX = 1.0
-MAX_ROBOTS = 128
+MAX_ROBOTS = 512  # keep in step with SIM2D_MAX_ROBOTS in CMake
 
 
 def classify(text):

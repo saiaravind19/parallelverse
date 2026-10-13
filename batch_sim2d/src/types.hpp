@@ -13,7 +13,10 @@ using madrona::CountT;
 // Limits fixed at compile time so that every world has the same table shape
 // (required by Madrona's exported buffers).
 namespace limits {
-inline constexpr CountT maxRobotsPerWorld = 128;
+#ifndef SIM2D_MAX_ROBOTS
+#error "SIM2D_MAX_ROBOTS is set by CMake (-DSIM2D_MAX_ROBOTS=N)"
+#endif
+inline constexpr CountT maxRobotsPerWorld = SIM2D_MAX_ROBOTS;
 inline constexpr CountT maxWaypoints = 32;
 inline constexpr int32_t maxMapDim = 128; // cells per side
 }

@@ -71,8 +71,10 @@ bool loadScene(const std::string &path, float &dt,
 
         const auto &robots = wj.at("robots");
         if ((CountT)robots.size() > limits::maxRobotsPerWorld) {
-            err = "more than " + std::to_string(limits::maxRobotsPerWorld) +
-                  " robots in one world";
+            err = "scene has " + std::to_string(robots.size()) +
+                  " robots in one world; this build holds up to " +
+                  std::to_string(limits::maxRobotsPerWorld) +
+                  ". Rebuild with -DSIM2D_MAX_ROBOTS=<count>";
             return false;
         }
 
