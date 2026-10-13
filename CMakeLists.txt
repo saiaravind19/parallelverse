@@ -9,3 +9,4 @@ include(dependencies)
 
 add_subdirectory(external)
 add_subdirectory(src)
+add_subdirectory(batch_sim2d)

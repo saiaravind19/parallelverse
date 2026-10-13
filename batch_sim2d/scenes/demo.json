@@ -1,0 +1,12 @@
+{
+  "dt": 0.04,
+  "worlds": [
+    {
+      "map": "../maps/open_10x10.csv",
+      "robots": [
+        {"x": 1.5, "y": 1.5, "theta": 0.0, "radius": 0.3, "vmax": 2.0, "amax": 1.0, "omegamax": 1.0},
+        {"x": 8.5, "y": 8.5, "theta": 3.14, "radius": 0.3, "vmax": 2.0, "amax": 1.0, "omegamax": 1.0}
+      ]
+    }
+  ]
+}
