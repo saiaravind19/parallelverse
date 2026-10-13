@@ -12,6 +12,8 @@
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
 #include <zmq.h>
+#include <pb_decode.h>
+#include <pb_encode.h>
 #include "sim2d_msgs.pb.h"
 
 #include <cmath>
@@ -34,26 +36,95 @@ constexpr int kWinH = 800;
 constexpr int kRecordFps = 25;
 
 // Topics use ROS-style names: /world_<w>/state and /cmd_path.
-void publishWorldState(void *pub, uint32_t world,
-                       const sim2d_msgs::WorldState &msg)
+// Bodies are protobuf (proto/sim2d_msgs.proto), encoded with nanopb.
+
+struct StateCtx {
+    const Manager *mgr;
+    uint32_t world;
+    uint32_t robots;
+};
+
+bool encodeRobots(pb_ostream_t *stream, const pb_field_t *field, void *const *arg)
 {
-    std::string topic = "/world_" + std::to_string(world) + "/state";
-    std::string body;
-    msg.SerializeToString(&body);
-    zmq_send(pub, topic.data(), topic.size(), ZMQ_SNDMORE);
-    zmq_send(pub, body.data(), body.size(), 0);
+    const StateCtx *ctx = (const StateCtx *)*arg;
+    for (uint32_t r = 0; r < ctx->robots; r++) {
+        RobotState s = ctx->mgr->robotState(ctx->world, r);
+        sim2d_msgs_RobotState rs = sim2d_msgs_RobotState_init_zero;
+        rs.robot_id = r;
+        rs.has_pose = true;
+        rs.pose.x = s.x;
+        rs.pose.y = s.y;
+        rs.pose.theta = s.theta;
+        rs.v = s.v;
+        rs.stopped = s.stopped != 0;
+        rs.hit_robot = s.hitRobot != 0;
+        rs.finished = s.count > 0 && s.next >= s.count;
+        rs.next_index = (uint32_t)s.next;
+        rs.waypoint_count = (uint32_t)s.count;
+        if (!pb_encode_tag_for_field(stream, field)) return false;
+        if (!pb_encode_submessage(stream, sim2d_msgs_RobotState_fields, &rs)) return false;
+    }
+    return true;
 }
 
-// Reads one PathCommand if one is waiting. The socket only receives
-// "/cmd_path" messages, so the topic frame is skipped.
-bool pollPathCommand(void *sub, sim2d_msgs::PathCommand &out)
+void publishWorldState(void *pub, const Manager &mgr, uint32_t world,
+                       uint32_t robots, uint64_t step, float dt,
+                       std::vector<uint8_t> &buf)
+{
+    sim2d_msgs_WorldState ws = sim2d_msgs_WorldState_init_zero;
+    ws.has_header = true;
+    ws.header.seq = step;
+    ws.header.stamp_ms = (uint64_t)(step * dt * 1000.0);
+    std::snprintf(ws.header.frame_id, sizeof(ws.header.frame_id), "map");
+    ws.world_id = world;
+    StateCtx ctx { &mgr, world, robots };
+    ws.robots.funcs.encode = encodeRobots;
+    ws.robots.arg = &ctx;
+
+    buf.resize(128 + (size_t)robots * 64);  // each robot encodes in under 64 bytes
+    pb_ostream_t os = pb_ostream_from_buffer(buf.data(), buf.size());
+    if (!pb_encode(&os, sim2d_msgs_WorldState_fields, &ws)) {
+        fprintf(stderr, "could not encode WorldState: %s\n", PB_GET_ERROR(&os));
+        return;
+    }
+    std::string topic = "/world_" + std::to_string(world) + "/state";
+    zmq_send(pub, topic.data(), topic.size(), ZMQ_SNDMORE);
+    zmq_send(pub, buf.data(), os.bytes_written, 0);
+}
+
+bool decodePose(pb_istream_t *stream, const pb_field_t *, void **arg)
+{
+    std::vector<Vec2> *pts = (std::vector<Vec2> *)*arg;
+    sim2d_msgs_Pose2D p = sim2d_msgs_Pose2D_init_zero;
+    if (!pb_decode(stream, sim2d_msgs_Pose2D_fields, &p)) return false;
+    pts->push_back(Vec2 { p.x, p.y });
+    return true;
+}
+
+// Reads one PathCommand if one is waiting. Returns 0 if none, 1 if a command
+// was read, -1 if a message was received but could not be decoded. The socket
+// only receives "/cmd_path" messages, so the topic frame is skipped.
+int pollPathCommand(void *sub, uint32_t &world, uint32_t &robot,
+                    std::vector<Vec2> &pts)
 {
     char buf[65536];
     int n = zmq_recv(sub, buf, sizeof(buf), ZMQ_DONTWAIT);
-    if (n < 0) return false;
+    if (n < 0) return 0;
     int m = zmq_recv(sub, buf, sizeof(buf), 0);
-    if (m < 0) return false;
-    return out.ParseFromArray(buf, m);
+    if (m < 0 || m > (int)sizeof(buf)) return -1;
+
+    pts.clear();
+    sim2d_msgs_PathCommand cmd = sim2d_msgs_PathCommand_init_zero;
+    cmd.path.poses.funcs.decode = decodePose;
+    cmd.path.poses.arg = &pts;
+    pb_istream_t is = pb_istream_from_buffer((const pb_byte_t *)buf, (size_t)m);
+    if (!pb_decode(&is, sim2d_msgs_PathCommand_fields, &cmd)) {
+        fprintf(stderr, "ignored bad PathCommand: %s\n", PB_GET_ERROR(&is));
+        return -1;
+    }
+    world = cmd.world_id;
+    robot = cmd.robot_id;
+    return 1;
 }
 
 struct Recording {
@@ -168,27 +239,25 @@ int main(int argc, char **argv)
     std::vector<unsigned char> frame;
     double last = glfwGetTime();
     uint64_t stepCount = 0;
+    std::vector<uint8_t> stateBuf;
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
         // Path commands from ZeroMQ.
-        sim2d_msgs::PathCommand cmd;
-        while (pollPathCommand(sub, cmd)) {
-            uint32_t w = cmd.world_id();
-            uint32_t r = cmd.robot_id();
-            if (w >= nW || r >= limits::maxRobotsPerWorld) continue;
-            std::vector<Vec2> pts;
-            for (const auto &p : cmd.path().poses()) {
-                pts.push_back(Vec2 { p.x(), p.y() });
-            }
-            if (pts.size() > (size_t)limits::maxWaypoints) {
+        std::vector<Vec2> cmdPts;
+        uint32_t cmdWorld = 0, cmdRobot = 0;
+        for (int got = pollPathCommand(sub, cmdWorld, cmdRobot, cmdPts); got != 0;
+             got = pollPathCommand(sub, cmdWorld, cmdRobot, cmdPts)) {
+            if (got < 0) continue;
+            if (cmdWorld >= nW || cmdRobot >= limits::maxRobotsPerWorld) continue;
+            if (cmdPts.size() > (size_t)limits::maxWaypoints) {
                 fprintf(stderr, "ignored command: %zu waypoints, limit is %d\n",
-                        pts.size(), (int)limits::maxWaypoints);
+                        cmdPts.size(), (int)limits::maxWaypoints);
                 continue;
             }
-            paths[w][r] = pts;
-            mgr.setWaypoints(w, r, pts);
+            paths[cmdWorld][cmdRobot] = cmdPts;
+            mgr.setWaypoints(cmdWorld, cmdRobot, cmdPts);
         }
 
         // Step at real time * speed, and publish state after each step.
@@ -201,27 +270,8 @@ int main(int argc, char **argv)
                 accum -= dt;
                 stepCount++;
                 for (uint32_t w = 0; w < nW; w++) {
-                    sim2d_msgs::WorldState ws;
-                    ws.set_world_id(w);
-                    sim2d_msgs::Header *h = ws.mutable_header();
-                    h->set_seq(stepCount);
-                    h->set_stamp_ms((uint64_t)(stepCount * dt * 1000.0));
-                    h->set_frame_id("map");
-                    for (uint32_t r = 0; r < (uint32_t)robotCount(w); r++) {
-                        RobotState s = mgr.robotState(w, r);
-                        sim2d_msgs::RobotState *rs = ws.add_robots();
-                        rs->set_robot_id(r);
-                        rs->mutable_pose()->set_x(s.x);
-                        rs->mutable_pose()->set_y(s.y);
-                        rs->mutable_pose()->set_theta(s.theta);
-                        rs->set_v(s.v);
-                        rs->set_stopped(s.stopped != 0);
-                        rs->set_hit_robot(s.hitRobot != 0);
-                        rs->set_finished(s.count > 0 && s.next >= s.count);
-                        rs->set_next_index((uint32_t)s.next);
-                        rs->set_waypoint_count((uint32_t)s.count);
-                    }
-                    publishWorldState(pub, w, ws);
+                    publishWorldState(pub, mgr, w, (uint32_t)robotCount(w),
+                                      stepCount, dt, stateBuf);
                 }
             }
         } else {
