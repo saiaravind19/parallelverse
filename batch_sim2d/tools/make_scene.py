@@ -14,6 +14,7 @@ Cell rules (same as the simulator):
 import argparse
 import csv
 import json
+import math
 import os
 import sys
 
@@ -38,8 +39,16 @@ def classify(text):
     return None  # text outside the grid
 
 
+# Facing for each direction symbol in a "(a,b,c,d)" cell (file up = +y).
+DIR_THETA = {"^": math.pi / 2, "v": -math.pi / 2, ">": 0.0, "<": math.pi}
+
+
 def load_layout(path):
-    """Return (width, height, free) with free[(x, y)] = True, y up from the bottom."""
+    """Return (width, height, free).
+
+    free maps (x, y) -> string of direction symbols allowed in that cell
+    ("" for plain "0" cells), with y up from the bottom.
+    """
     with open(path, newline="") as f:
         rows = list(csv.reader(f))
 
@@ -59,14 +68,36 @@ def load_layout(path):
     if width == 0 or height == 0:
         raise ValueError("no drivable or wall cells found in the layout")
 
-    free = set()
+    free = {}
     for (r, c), k in kinds.items():
         if c >= width or r >= height:
             continue  # outside the grid block
         if k == "free":
             # File row 0 is the top of the layout; y grows upward.
-            free.add((c, height - 1 - r))
+            text = rows[r][c].strip() if r < len(rows) and c < len(rows[r]) else ""
+            dirs = "".join(ch for ch in text if ch in DIR_THETA)
+            free[(c, height - 1 - r)] = dirs
     return width, height, free
+
+
+def pick_lane_spawns(free, count):
+    """Spawns for a layout with direction rules.
+
+    Robots start only on lane cells (exactly one allowed direction), facing
+    that direction, spread evenly over the whole layout.
+    Returns [(x, y, theta)] or None if there are not enough lane cells.
+    """
+    lanes = sorted((p for p, d in free.items() if len(d) == 1),
+                   key=lambda p: (-p[1], p[0]))  # top row first, like the file
+    for gap in (3, 2, 1):
+        spaced = []
+        for p in lanes:
+            if all(max(abs(p[0] - q[0]), abs(p[1] - q[1])) >= gap for q in spaced):
+                spaced.append(p)
+        if len(spaced) >= count:
+            picks = [spaced[i * len(spaced) // count] for i in range(count)]
+            return [(x, y, DIR_THETA[free[(x, y)]]) for (x, y) in picks]
+    return None
 
 
 def pick_spawns(width, height, free, count):
@@ -105,7 +136,13 @@ def write_scene(layout, count):
     the CSV. The map path in the scene is relative to the scene file.
     """
     width, height, free = load_layout(layout)
-    spawns = pick_spawns(width, height, free, count)
+    spawns = None
+    if any(free.values()):  # layout has direction rules: stay on its lanes
+        spawns = pick_lane_spawns(free, count)
+        if spawns is None:
+            raise ValueError(f"layout has fewer than {count} lane cells to start on")
+    if spawns is None:
+        spawns = [(x, y, 0.0) for (x, y) in pick_spawns(width, height, free, count)]
 
     csv_abs = os.path.abspath(layout)
     csv_dir = os.path.dirname(csv_abs)
@@ -118,9 +155,9 @@ def write_scene(layout, count):
     map_rel = os.path.relpath(csv_abs, scene_dir).replace(os.sep, "/")
 
     robots = [{
-        "x": x + 0.5, "y": y + 0.5, "theta": 0.0,
+        "x": x + 0.5, "y": y + 0.5, "theta": round(theta, 4),
         "radius": RADIUS, "vmax": VMAX, "amax": AMAX, "omegamax": OMEGAMAX,
-    } for (x, y) in spawns]
+    } for (x, y, theta) in spawns]
 
     scene = {
         "dt": DT,
