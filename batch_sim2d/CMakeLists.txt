@@ -39,3 +39,6 @@ target_link_libraries(sim2d_imgui PUBLIC glfw OpenGL::GL)
 
 add_executable(sim2d_app src/app.cpp)
 target_link_libraries(sim2d_app PRIVATE sim2d_core sim2d_imgui zmq)
+
+add_executable(sim2d_map_check src/map_check.cpp)
+target_link_libraries(sim2d_map_check PRIVATE sim2d_core)

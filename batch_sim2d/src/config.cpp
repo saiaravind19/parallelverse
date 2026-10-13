@@ -38,10 +38,18 @@ bool loadScene(const std::string &path, float &dt,
     worlds.clear();
     names.clear();
 
-    for (const auto &wj : root.at("worlds")) {
+    if (!root.contains("worlds") || !root["worlds"].is_array()) {
+        err = "scene file needs a \"worlds\" array";
+        return false;
+    }
+    for (const auto &wj : root["worlds"]) {
+        if (!wj.contains("map") || !wj.contains("robots")) {
+            err = "each world needs \"map\" and \"robots\"";
+            return false;
+        }
         bs2d::Map map;
         std::string map_err;
-        fs::path map_path = base / wj.at("map").get<std::string>();
+        fs::path map_path = base / wj["map"].get<std::string>();
         if (!bs2d::loadMapCSV(map_path.string(), map, map_err)) {
             err = "world map: " + map_err;
             return false;
@@ -70,9 +78,13 @@ bool loadScene(const std::string &path, float &dt,
 
         for (CountT i = 0; i < (CountT)robots.size(); i++) {
             const auto &rj = robots[i];
+            if (!rj.contains("x") || !rj.contains("y")) {
+                err = "each robot needs \"x\" and \"y\"";
+                return false;
+            }
             Sim::RobotSpawn &s = init.spawns[i];
-            s.x = rj.at("x").get<float>();
-            s.y = rj.at("y").get<float>();
+            s.x = rj["x"].get<float>();
+            s.y = rj["y"].get<float>();
             s.theta = rj.value("theta", 0.f);
             s.radius = rj.value("radius", 0.3f);
             s.vMax = rj.value("vmax", 2.f);

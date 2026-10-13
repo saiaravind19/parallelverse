@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <vector>
 
+#include "map.hpp"
 #include "mgr.hpp"
 
 using namespace sim2d;
@@ -70,7 +71,29 @@ int main()
         worlds.push_back(w);
     }
 
+    // World 3: real layout from CSV. Robot at row 13 (y = 22.5), left of the
+    // empty gap at columns 2-3, must stop before the gap's wall.
+    {
+        bs2d::Map m;
+        std::string err;
+        if (!bs2d::loadMapCSV("../batch_sim2d/maps/layout_sample.csv", m, err)) {
+            printf("layout load failed: %s\n", err.c_str());
+            return 1;
+        }
+        Sim::WorldInit w {};
+        w.map.width = m.width;
+        w.map.height = m.height;
+        w.map.originX = m.originX;
+        w.map.originY = m.originY;
+        for (int32_t i = 0; i < m.width * m.height; i++) {
+            w.map.cells[i] = m.occupied[i];
+        }
+        w.spawns[0] = spawn(0.5f, 22.5f, 0.f);
+        worlds.push_back(w);
+    }
+
     Manager mgr({ .dt = 0.04f }, worlds);
+    mgr.setWaypoints(3, 0, {{5.5f, 22.5f}});
 
     mgr.setWaypoints(0, 0, {{8.5f, 4.5f}});
     mgr.setWaypoints(1, 0, {{8.5f, 4.5f}});
@@ -101,6 +124,11 @@ int main()
     printf("World 2 (head-on): A x=%.3f, B x=%.3f, dist=%.3f\n", a2.x, b2.x, d2);
     check(a2.stopped == 1 && b2.stopped == 1, "both robots stop on head-on contact");
     check(d2 >= 0.6f - 1e-3f, "head-on robots never overlap");
+
+    RobotState l3 = mgr.robotState(3, 0);
+    printf("World 3 (layout gap): x=%.3f stopped=%d\n", l3.x, l3.stopped);
+    check(l3.stopped == 1, "robot stops at layout gap wall");
+    check(l3.x < 2.0f - 0.3f + 1e-3f, "robot stays left of the gap wall");
 
     printf("%s (%d failures)\n", failures ? "FAILED" : "ALL PASSED", failures);
     return failures ? 1 : 0;
