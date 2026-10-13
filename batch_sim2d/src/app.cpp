@@ -181,6 +181,11 @@ int main(int argc, char **argv)
             for (const auto &p : cmd.value("waypoints", json::array())) {
                 pts.push_back(Vec2 { p[0].get<float>(), p[1].get<float>() });
             }
+            if (pts.size() > (size_t)limits::maxWaypoints) {
+                fprintf(stderr, "ignored command: %zu waypoints, limit is %d\n",
+                        pts.size(), (int)limits::maxWaypoints);
+                continue;
+            }
             paths[w][r] = pts;
             mgr.setWaypoints(w, r, pts);
         }

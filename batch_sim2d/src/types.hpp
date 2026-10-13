@@ -14,11 +14,11 @@ using madrona::CountT;
 // (required by Madrona's exported buffers).
 namespace limits {
 #ifndef SIM2D_MAX_ROBOTS
-#error "SIM2D_MAX_ROBOTS is set by CMake (-DSIM2D_MAX_ROBOTS=N)"
+#error "Build settings are missing: configure with CMake (see batch_sim2d/CMakeLists.txt)"
 #endif
 inline constexpr CountT maxRobotsPerWorld = SIM2D_MAX_ROBOTS;
-inline constexpr CountT maxWaypoints = 32;
-inline constexpr int32_t maxMapDim = 128; // cells per side
+inline constexpr CountT maxWaypoints = SIM2D_MAX_WAYPOINTS;
+inline constexpr int32_t maxMapDim = SIM2D_MAX_MAP_DIM; // cells per side
 }
 
 struct Vec2 {

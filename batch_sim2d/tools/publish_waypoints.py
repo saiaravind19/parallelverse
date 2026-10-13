@@ -31,8 +31,8 @@ def parse_waypoints(text):
             raise ValueError(f"'{token}' is not an x,y pair; put a comma between x and y, "
                              "and a space between points")
         pts.append([float(parts[0]), float(parts[1])])
-    if len(pts) > 32:
-        raise ValueError("at most 32 waypoints per robot")
+    if len(pts) > 64:  # default SIM2D_MAX_WAYPOINTS; the app warns if it is lower
+        raise ValueError("at most 64 waypoints per robot (default build)")
     return pts
 
 
