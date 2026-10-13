@@ -54,9 +54,16 @@ if(NOT ZMQ_INCLUDE_DIR OR NOT ZMQ_LIBRARY)
     message(FATAL_ERROR "libzmq not found. Install it (macOS: brew install zeromq; Ubuntu: apt install libzmq3-dev)")
 endif()
 
+# ---- Messages: protobuf for ZeroMQ payloads ----
+find_package(Protobuf REQUIRED)
+protobuf_generate_cpp(SIM2D_MSG_SRCS SIM2D_MSG_HDRS proto/sim2d_msgs.proto)
+add_library(sim2d_msgs STATIC ${SIM2D_MSG_SRCS} ${SIM2D_MSG_HDRS})
+target_include_directories(sim2d_msgs PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(sim2d_msgs PUBLIC protobuf::libprotobuf madrona_mw_core)  # same C++ library as the rest of the sim
+
 add_executable(sim2d_app src/app.cpp)
 target_include_directories(sim2d_app PRIVATE ${ZMQ_INCLUDE_DIR})
-target_link_libraries(sim2d_app PRIVATE sim2d_core sim2d_imgui ${ZMQ_LIBRARY})
+target_link_libraries(sim2d_app PRIVATE sim2d_msgs protobuf::libprotobuf sim2d_core sim2d_imgui ${ZMQ_LIBRARY})
 
 add_executable(sim2d_map_check src/map_check.cpp)
 target_link_libraries(sim2d_map_check PRIVATE sim2d_core)

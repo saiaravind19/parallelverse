@@ -2,9 +2,9 @@
 // and a Record button that writes an MP4 via ffmpeg.
 //
 // Usage: sim2d_app [scene.json]
-//   state   PUB tcp://*:5555  topic "state/<world>"  JSON
-//   command SUB tcp://*:5556  topic "cmd"            JSON
-//           {"world":0,"robot":1,"waypoints":[[x,y],...]}
+//   state   PUB tcp://*:5555  topic "/world_<w>/state"  protobuf WorldState
+//   command SUB tcp://*:5556  topic "/cmd_path"          protobuf PathCommand
+//           (proto/sim2d_msgs.proto)
 
 #define GL_SILENCE_DEPRECATION
 #include <GLFW/glfw3.h>
@@ -12,7 +12,7 @@
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
 #include <zmq.h>
-#include <nlohmann/json.hpp>
+#include "sim2d_msgs.pb.h"
 
 #include <cmath>
 #include <cstdio>
@@ -25,7 +25,6 @@
 #include "config.hpp"
 #include "mgr.hpp"
 
-using json = nlohmann::json;
 using namespace sim2d;
 
 namespace {
@@ -34,26 +33,27 @@ constexpr int kWinW = 1280;
 constexpr int kWinH = 800;
 constexpr int kRecordFps = 25;
 
-void publishState(void *pub, uint32_t world, const json &msg)
+// Topics use ROS-style names: /world_<w>/state and /cmd_path.
+void publishWorldState(void *pub, uint32_t world,
+                       const sim2d_msgs::WorldState &msg)
 {
-    std::string topic = "state/" + std::to_string(world);
-    std::string body = msg.dump();
+    std::string topic = "/world_" + std::to_string(world) + "/state";
+    std::string body;
+    msg.SerializeToString(&body);
     zmq_send(pub, topic.data(), topic.size(), ZMQ_SNDMORE);
     zmq_send(pub, body.data(), body.size(), 0);
 }
 
-// Returns a discarded json when no command is waiting.
-json pollCommand(void *sub)
+// Reads one PathCommand if one is waiting. The socket only receives
+// "/cmd_path" messages, so the topic frame is skipped.
+bool pollPathCommand(void *sub, sim2d_msgs::PathCommand &out)
 {
     char buf[65536];
     int n = zmq_recv(sub, buf, sizeof(buf), ZMQ_DONTWAIT);
-    if (n < 0) return json(json::value_t::discarded);
-    if (n != 3 || std::memcmp(buf, "cmd", 3) != 0) {
-        return json(json::value_t::discarded);
-    }
+    if (n < 0) return false;
     int m = zmq_recv(sub, buf, sizeof(buf), 0);
-    if (m < 0) return json(json::value_t::discarded);
-    return json::parse(std::string(buf, m), nullptr, false);
+    if (m < 0) return false;
+    return out.ParseFromArray(buf, m);
 }
 
 struct Recording {
@@ -128,7 +128,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "could not bind ZeroMQ ports 5555/5556\n");
         return 1;
     }
-    zmq_setsockopt(sub, ZMQ_SUBSCRIBE, "cmd", 3);
+    zmq_setsockopt(sub, ZMQ_SUBSCRIBE, "/cmd_path", 9);
 
     if (!glfwInit()) {
         fprintf(stderr, "glfwInit failed\n");
@@ -167,19 +167,20 @@ int main(int argc, char **argv)
     std::string status = "Ready";
     std::vector<unsigned char> frame;
     double last = glfwGetTime();
+    uint64_t stepCount = 0;
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
-        // Waypoint commands from ZeroMQ.
-        for (json cmd = pollCommand(sub); !cmd.is_discarded();
-             cmd = pollCommand(sub)) {
-            uint32_t w = cmd.value("world", 0u);
-            uint32_t r = cmd.value("robot", 0u);
+        // Path commands from ZeroMQ.
+        sim2d_msgs::PathCommand cmd;
+        while (pollPathCommand(sub, cmd)) {
+            uint32_t w = cmd.world_id();
+            uint32_t r = cmd.robot_id();
             if (w >= nW || r >= limits::maxRobotsPerWorld) continue;
             std::vector<Vec2> pts;
-            for (const auto &p : cmd.value("waypoints", json::array())) {
-                pts.push_back(Vec2 { p[0].get<float>(), p[1].get<float>() });
+            for (const auto &p : cmd.path().poses()) {
+                pts.push_back(Vec2 { p.x(), p.y() });
             }
             if (pts.size() > (size_t)limits::maxWaypoints) {
                 fprintf(stderr, "ignored command: %zu waypoints, limit is %d\n",
@@ -198,15 +199,29 @@ int main(int argc, char **argv)
             while (accum >= dt) {
                 mgr.step();
                 accum -= dt;
+                stepCount++;
                 for (uint32_t w = 0; w < nW; w++) {
-                    json robots = json::array();
+                    sim2d_msgs::WorldState ws;
+                    ws.set_world_id(w);
+                    sim2d_msgs::Header *h = ws.mutable_header();
+                    h->set_seq(stepCount);
+                    h->set_stamp_ms((uint64_t)(stepCount * dt * 1000.0));
+                    h->set_frame_id("map");
                     for (uint32_t r = 0; r < (uint32_t)robotCount(w); r++) {
                         RobotState s = mgr.robotState(w, r);
-                        robots.push_back({ {"id", r}, {"x", s.x}, {"y", s.y},
-                            {"theta", s.theta}, {"v", s.v},
-                            {"stopped", s.stopped}, {"collided", s.collided} });
+                        sim2d_msgs::RobotState *rs = ws.add_robots();
+                        rs->set_robot_id(r);
+                        rs->mutable_pose()->set_x(s.x);
+                        rs->mutable_pose()->set_y(s.y);
+                        rs->mutable_pose()->set_theta(s.theta);
+                        rs->set_v(s.v);
+                        rs->set_stopped(s.stopped != 0);
+                        rs->set_hit_robot(s.hitRobot != 0);
+                        rs->set_finished(s.count > 0 && s.next >= s.count);
+                        rs->set_next_index((uint32_t)s.next);
+                        rs->set_waypoint_count((uint32_t)s.count);
                     }
-                    publishState(pub, w, { {"world", w}, {"robots", robots} });
+                    publishWorldState(pub, w, ws);
                 }
             }
         } else {

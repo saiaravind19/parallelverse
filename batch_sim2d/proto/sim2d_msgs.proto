@@ -1,0 +1,58 @@
+// Messages for the sim2d ZeroMQ interface. Names follow ROS message types
+// (std_msgs/Header, geometry_msgs/Pose2D, nav_msgs/Path) so they are easy to
+// map to ROS later. Transport: ZeroMQ, one topic frame then one protobuf body.
+//
+// Topics:
+//   /world_<w>/state   WorldState   published by sim2d_app after each step
+//   /cmd_path          PathCommand  subscribed by sim2d_app
+
+syntax = "proto3";
+
+package sim2d_msgs;
+
+// Like std_msgs/Header.
+message Header {
+  uint64 stamp_ms = 1;  // simulated time in milliseconds
+  string frame_id = 2;  // coordinate frame, e.g. "map"
+  uint64 seq = 3;       // simulation step counter
+}
+
+// Like geometry_msgs/Pose2D. Position in metres, heading in radians.
+message Pose2D {
+  float x = 1;
+  float y = 2;
+  float theta = 3;
+}
+
+// Like nav_msgs/Path: an ordered list of poses to drive through.
+message Path {
+  Header header = 1;
+  repeated Pose2D poses = 2;
+}
+
+// Status of one robot.
+message RobotState {
+  uint32 robot_id = 1;
+  Pose2D pose = 2;
+  float v = 3;                // current speed, m/s
+  bool stopped = 4;           // halted by a wall or another robot
+  bool hit_robot = 5;         // halted by contact with another robot
+  bool finished = 6;          // reached its last waypoint
+  uint32 next_index = 7;      // index of the current target waypoint
+  uint32 waypoint_count = 8;  // number of waypoints in its path
+}
+
+// Published once per simulation step for each world.
+message WorldState {
+  Header header = 1;
+  uint32 world_id = 2;
+  repeated RobotState robots = 3;
+}
+
+// Sets the path for one robot. An empty path clears it.
+message PathCommand {
+  Header header = 1;
+  uint32 world_id = 2;
+  uint32 robot_id = 3;
+  Path path = 4;
+}
