@@ -163,7 +163,6 @@ int main(int argc, char **argv)
     float speed = 1.f;
     float accum = 0.f;
     int sel_world = 0;
-    int sel_robot = 0;
     Recording rec;
     std::string status = "Ready";
     std::vector<unsigned char> frame;
@@ -220,13 +219,8 @@ int main(int argc, char **argv)
         ImGui::Checkbox("Playing", &playing);
         ImGui::SliderFloat("Speed", &speed, 0.1f, 5.f, "%.1fx");
         int nR = robotCount(sel_world);
-        if (sel_robot >= nR) sel_robot = 0;
-        ImGui::SliderInt("Robot", &sel_robot, 0, nR - 1);
-        ImGui::TextWrapped("Click the map to add a waypoint for the selected robot.");
-        if (ImGui::Button("Clear waypoints")) {
-            paths[sel_world][sel_robot].clear();
-            mgr.setWaypoints(sel_world, sel_robot, {});
-        }
+        ImGui::TextWrapped("Waypoints come in over ZeroMQ (topic cmd).");
+        ImGui::TextWrapped("Blue: moving   Cyan: finished   Orange: blocked by wall   Red: robot contact");
         ImGui::Separator();
         if (!rec.pipe) {
             if (ImGui::Button("Record")) {
@@ -246,10 +240,7 @@ int main(int argc, char **argv)
         if (ImGui::BeginTabBar("worlds")) {
             for (uint32_t w = 0; w < nW; w++) {
                 if (ImGui::BeginTabItem(names[w].c_str())) {
-                    if ((int)w != sel_world) {
-                        sel_world = (int)w;
-                        sel_robot = 0;
-                    }
+                    sel_world = (int)w;
                     ImGui::EndTabItem();
                 }
             }
@@ -273,6 +264,14 @@ int main(int argc, char **argv)
                                   IM_COL32(90, 90, 100, 255));
             }
         }
+        // Grid: one line per cell edge, so every CSV cell is visible.
+        const ImU32 gridCol = IM_COL32(60, 60, 70, 255);
+        for (int32_t x = 0; x <= map.width; x++) {
+            dl->AddLine(toScreen(x, 0), toScreen(x, map.height), gridCol);
+        }
+        for (int32_t y = 0; y <= map.height; y++) {
+            dl->AddLine(toScreen(0, y), toScreen(map.width, y), gridCol);
+        }
 
         for (int r = 0; r < nR; r++) {
             const auto &pts = paths[sel_world][r];
@@ -285,8 +284,12 @@ int main(int argc, char **argv)
                 }
             }
             RobotState s = mgr.robotState(sel_world, r);
-            ImU32 col = (s.collided || s.stopped)
-                ? IM_COL32(230, 90, 80, 255) : IM_COL32(80, 160, 240, 255);
+            ImU32 col = IM_COL32(80, 160, 240, 255);                        // moving / idle
+            if (s.count > 0 && s.next >= s.count) {
+                col = IM_COL32(80, 200, 200, 255);                          // finished
+            }
+            if (s.stopped) col = IM_COL32(240, 160, 40, 255);               // wall stop
+            if (s.hitRobot) col = IM_COL32(230, 60, 60, 255);               // robot contact
             float rad = worlds[sel_world].spawns[r].radius * scale;
             ImVec2 c = toScreen(s.x, s.y);
             dl->AddCircleFilled(c, rad, col);
@@ -295,16 +298,6 @@ int main(int argc, char **argv)
             dl->AddLine(c, tip, IM_COL32(255, 255, 255, 255), 2.f);
         }
 
-        ImGui::InvisibleButton("canvas", avail);
-        if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
-            ImVec2 m = ImGui::GetIO().MousePos;
-            Vec2 wp { (m.x - p0.x) / scale, (p0.y + avail.y - m.y) / scale };
-            auto &list = paths[sel_world][sel_robot];
-            if (list.size() < (size_t)limits::maxWaypoints) {
-                list.push_back(wp);
-                mgr.setWaypoints(sel_world, sel_robot, list);
-            }
-        }
         ImGui::End();
 
         ImGui::Render();

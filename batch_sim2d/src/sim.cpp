@@ -60,6 +60,7 @@ inline void applyCommandSystem(Engine &,
     motion.cmdSeq = cmd.seq;
     motion.stopped = 0;
     motion.collided = 0;
+    motion.hitRobot = 0;
 
     path.count = cmd.count;
     path.next = 0;
@@ -163,6 +164,7 @@ inline void resolveCollisionSystem(Engine &,
     pose.x = motion.prevX;
     pose.y = motion.prevY;
     motion.stopped = 1;
+    motion.hitRobot = 1;
     motion.v = 0.f;
 }
 
@@ -181,6 +183,7 @@ inline void statusSystem(Engine &,
     state.count = path.count;
     state.stopped = motion.stopped;
     state.collided = motion.collided;
+    state.hitRobot = motion.hitRobot;
     state.active = motion.active;
 }
 

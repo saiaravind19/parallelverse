@@ -57,6 +57,7 @@ struct RobotMotion {
     int32_t active;  // 0 = unused slot in this world
     int32_t stopped; // 1 = halted (collision or wall); cleared by new command
     int32_t collided;// set by collision detection this step
+    int32_t hitRobot;// 1 = stopped by contact with another robot; cleared by new command
     int32_t cmdSeq;  // last command sequence applied
 };
 
@@ -85,6 +86,7 @@ struct RobotState {
     int32_t count;
     int32_t stopped;
     int32_t collided;
+    int32_t hitRobot;
     int32_t active;
 };
 
