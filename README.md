@@ -90,7 +90,7 @@ Options:
 ./sim2d_app ../scenes/sample.json --max-robots 300  # optional: cap the slots for more speed (default: every movable cell)
 ```
 
-Slots per world come from `--max-robots`, else a scene-level `"max_robots": 300`, else every movable cell; they never exceed the movable cells.
+Slots per world come from `--max-robots`, else every movable cell; they never exceed the movable cells.
 
 A scene can also say `"robots": 40` instead of listing each robot. A world never
 holds more robots than its movable cells (cells with an arrow, or all free cells

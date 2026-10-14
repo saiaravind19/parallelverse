@@ -23,7 +23,6 @@ RADIUS = 0.3
 VMAX = 2.0
 AMAX = 1.0
 OMEGAMAX = 1.0
-MAX_ROBOTS = 512  # keep in step with SIM2D_MAX_ROBOTS in CMake
 
 
 def classify(text):
@@ -136,6 +135,11 @@ def write_scene(layout, count):
     the CSV. The map path in the scene is relative to the scene file.
     """
     width, height, free = load_layout(layout)
+    if count < 1:
+        raise ValueError("number of robots must be at least 1")
+    if count > len(free):
+        raise ValueError(f"layout has only {len(free)} movable cells, "
+                         f"cannot place {count} robots")
     spawns = None
     if any(free.values()):  # layout has direction rules: stay on its lanes
         spawns = pick_lane_spawns(free, count)
@@ -180,10 +184,11 @@ def main_cli():
         count = int(input("Number of robots: ").strip())
     except ValueError:
         sys.exit("Number of robots must be a whole number.")
-    if not 1 <= count <= MAX_ROBOTS:
-        sys.exit(f"Number of robots must be between 1 and {MAX_ROBOTS}.")
 
-    out_path, width, height, n_free = write_scene(layout, count)
+    try:
+        out_path, width, height, n_free = write_scene(layout, count)
+    except ValueError as e:
+        sys.exit(str(e))
     print(f"Wrote {out_path}")
     print(f"Map {width} x {height} cells, {n_free} drivable, {count} robot(s).")
     print(f"Run: ./sim2d_app \"{out_path}\"")
@@ -219,7 +224,7 @@ if HAVE_QT:
             browse.clicked.connect(self.choose_layout)
 
             self.robots = QSpinBox()
-            self.robots.setRange(1, MAX_ROBOTS)
+            self.robots.setRange(1, 100000)  # checked against the layout on Create
             self.robots.setValue(3)
 
             generate = QPushButton("Generate scene")

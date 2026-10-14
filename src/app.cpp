@@ -325,16 +325,13 @@ int main(int argc, char **argv)
     std::vector<WorldSpec> worlds;
     std::vector<std::string> names;
     std::string err;
-    int scene_max = 0;
-    if (!loadScene(scene_path, dt, worlds, names, err, robots_override, &scene_max)) {
+    if (!loadScene(scene_path, dt, worlds, names, err, robots_override)) {
         fprintf(stderr, "scene error: %s\n", err.c_str());
         return 1;
     }
     const uint32_t nW = (uint32_t)worlds.size();
 
-    // Slots: --max-robots, else the scene's "max_robots", else every movable
-    // cell. The manager never goes above the movable cells.
-    if (max_robots <= 0) max_robots = scene_max;
+    // Slots: --max-robots, else every movable cell (never above the movable cells).
     Manager mgr({ .dt = dt, .maxRobots = max_robots }, worlds);
     printf("%u world(s), room for %d robots per world (--max-robots to change)\n",
            nW, mgr.maxRobots());
