@@ -7,6 +7,9 @@ protobuf body (definitions in `proto/sim2d_msgs.proto`).
 |---|---|---|---|
 | `/world_<w>/state` | `WorldState` | sim -> clients | sim PUB binds `tcp://*:5555` |
 | `/cmd_path` | `PathCommand` | clients -> sim | sim SUB binds `tcp://*:5556` |
+| `/cmd_vel` | `VelocityCommand` | clients -> sim | same SUB socket (5556) |
+| `/cmd_spawn` | `SpawnCommand` | clients -> sim | same SUB socket (5556) |
+| service | `ControlModeRequest` -> `ControlModeResponse` | clients <-> sim | sim REP binds `tcp://*:5557` |
 
 Clients connect (PUB for commands, SUB for state). Many clients can connect to
 the same ports. Subscribe with the full topic, e.g. `/world_1/state`, so that
@@ -44,6 +47,33 @@ effect on the next step and clears the robot's stopped / collided flags. An
 empty path clears the path. A path longer than `SIM2D_MAX_WAYPOINTS` is ignored
 with a message on the sim's stderr. `tools/publish_waypoints.py` is a working
 example.
+
+## Control modes (waypoint or velocity)
+
+Each robot takes commands in exactly one mode, `CONTROL_MODE_WAYPOINT`
+(default, follows `PathCommand`) or `CONTROL_MODE_VELOCITY` (follows
+`VelocityCommand`: linear m/s, angular rad/s, limited by the robot's `vmax`,
+`omegamax` and `amax`). Commands for the other mode are ignored (the sim prints
+a warning) until the mode is switched. Switching drops the robot's path and
+stops it. The current mode is also in every `RobotState` (`control_mode`).
+
+Read or change the mode with a request/reply call on port 5557. The world is
+given by name (the tab title) or by index, and the reply contains the mode after
+the request, so it confirms the change. Mode `UNSPECIFIED` only reads.
+
+```
+uv run set_control_mode.py <world> <robot> get | waypoint | velocity
+uv run publish_velocity.py <world> <robot> <linear> <angular> [--hold seconds]
+```
+
+## Adding robots while it runs
+
+Publish a `SpawnCommand` on `/cmd_spawn` (or use the Add robots button, or
+`tools/spawn_robots.py`): `count` robots placed automatically, or one robot at
+`pose`. New robots get the next ids. A world never holds more robots than it has
+movable cells (cells with an arrow, or every free cell if the layout has no
+arrows), nor more than its robot slots (`--max-robots`). The sim prints why a
+spawn was refused.
 
 How to tell a robot is done: in `RobotState`, `finished` is true when it has
 reached its last waypoint; `stopped` and `hit_robot` tell you why it halted.

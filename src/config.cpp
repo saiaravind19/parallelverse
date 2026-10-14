@@ -11,9 +11,27 @@ namespace sim2d {
 using json = nlohmann::json;
 namespace fs = std::filesystem;
 
+static bool readDefaults(const json &j, RobotDefaults &d, std::string &err)
+{
+    d.radius = j.value("radius", d.radius);
+    d.vMax = j.value("vmax", d.vMax);
+    d.aMax = j.value("amax", d.aMax);
+    d.omegaMax = j.value("omegamax", d.omegaMax);
+    if (!(d.vMax > 0.f)) {
+        err = "vmax must be greater than 0";
+        return false;
+    }
+    if (!(d.radius > 0.f) || !(d.aMax > 0.f) || !(d.omegaMax > 0.f)) {
+        err = "radius, amax and omegamax must be > 0";
+        return false;
+    }
+    return true;
+}
+
 bool loadScene(const std::string &path, float &dt,
-               std::vector<Sim::WorldInit> &worlds,
-               std::vector<std::string> &names, std::string &err)
+               std::vector<WorldSpec> &worlds,
+               std::vector<std::string> &names, std::string &err,
+               int robotsOverride)
 {
     std::ifstream f(path);
     if (!f) {
@@ -43,7 +61,7 @@ bool loadScene(const std::string &path, float &dt,
         return false;
     }
     for (const auto &wj : root["worlds"]) {
-        if (!wj.contains("map") || !wj.contains("robots")) {
+        if (!wj.contains("map") || (!wj.contains("robots") && robotsOverride < 0)) {
             err = "each world needs \"map\" and \"robots\"";
             return false;
         }
@@ -60,7 +78,7 @@ bool loadScene(const std::string &path, float &dt,
             return false;
         }
 
-        Sim::WorldInit init {};
+        WorldSpec init {};
         init.map.width = map.width;
         init.map.height = map.height;
         init.map.originX = map.originX;
@@ -68,40 +86,59 @@ bool loadScene(const std::string &path, float &dt,
         for (int32_t i = 0; i < map.width * map.height; i++) {
             init.map.cells[i] = map.occupied[i];
         }
+        init.dirs = map.dirs;
 
-        const auto &robots = wj.at("robots");
-        if ((CountT)robots.size() > limits::maxRobotsPerWorld) {
-            err = "scene has " + std::to_string(robots.size()) +
-                  " robots in one world; this build holds up to " +
-                  std::to_string(limits::maxRobotsPerWorld) +
-                  ". Rebuild with -DSIM2D_MAX_ROBOTS=<count>";
+        const json none = json::array();
+        const json &robots = wj.contains("robots") ? wj["robots"] : none;
+        RobotDefaults def;
+        int auto_count = -1;  // >= 0: place this many automatically
+        if (robots.is_number_integer()) {
+            auto_count = robots.get<int>();
+        } else if (robots.is_object()) {
+            if (!readDefaults(robots, def, err)) return false;
+            auto_count = robots.value("count", 0);
+        } else if (!robots.is_array()) {
+            err = "\"robots\" must be a list, a number, or an object with \"count\"";
             return false;
         }
+        if (robotsOverride >= 0) auto_count = robotsOverride;
 
-        for (CountT i = 0; i < (CountT)robots.size(); i++) {
-            const auto &rj = robots[i];
-            if (!rj.contains("x") || !rj.contains("y")) {
-                err = "each robot needs \"x\" and \"y\"";
+        if (auto_count >= 0) {
+            init.spawns = placeRobots(init, {}, auto_count, def);
+            if ((int)init.spawns.size() < auto_count) {
+                err = "map " + map_path.string() + " has " +
+                      std::to_string(countMovableCells(init)) +
+                      " movable cells, so at most that many robots fit; asked for " +
+                      std::to_string(auto_count);
                 return false;
             }
-            Sim::RobotSpawn &s = init.spawns[i];
-            s.x = rj["x"].get<float>();
-            s.y = rj["y"].get<float>();
-            s.theta = rj.value("theta", 0.f);
-            s.radius = rj.value("radius", 0.3f);
-            s.vMax = rj.value("vmax", 2.f);
-            s.aMax = rj.value("amax", 1.f);
-            s.omegaMax = rj.value("omegamax", 1.f);
-            s.active = 1;
+        } else {
+            for (const auto &rj : robots) {
+                if (!rj.contains("x") || !rj.contains("y")) {
+                    err = "each robot needs \"x\" and \"y\"";
+                    return false;
+                }
+                RobotDefaults d;
+                if (!readDefaults(rj, d, err)) return false;
+                Sim::RobotSpawn s {};
+                s.x = rj["x"].get<float>();
+                s.y = rj["y"].get<float>();
+                s.theta = rj.value("theta", 0.f);
+                s.radius = d.radius;
+                s.vMax = d.vMax;
+                s.aMax = d.aMax;
+                s.omegaMax = d.omegaMax;
+                s.active = 1;
+                init.spawns.push_back(s);
+            }
+        }
 
-            if (!(s.vMax > 0.f)) {
-                err = "vmax must be greater than 0";
-                return false;
-            }
-            if (!(s.radius > 0.f) || !(s.aMax > 0.f) || !(s.omegaMax > 0.f)) {
-                err = "radius, amax and omegamax must be > 0";
-                return false;
-            }
+        int cells = countMovableCells(init);
+        if ((int)init.spawns.size() > cells) {
+            err = "map " + map_path.string() + " has only " + std::to_string(cells) +
+                  " movable cells but the scene starts " +
+                  std::to_string(init.spawns.size()) + " robots";
+            return false;
         }
 
         worlds.push_back(init);

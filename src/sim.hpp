@@ -17,7 +17,8 @@ enum class TaskGraphID : uint32_t {
 // Per-world sim state. Accessible from systems via ctx.data().
 struct Sim : public madrona::WorldBase {
     struct Config {
-        float dt; // seconds per step
+        float dt;           // seconds per step
+        int32_t maxRobots;  // robot slots per world (chosen at launch)
     };
 
     struct RobotSpawn {
@@ -26,10 +27,12 @@ struct Sim : public madrona::WorldBase {
         int32_t active;
     };
 
-    // Per-world initial data, built on the host from the config file.
+    // Per-world initial data, built on the host. The spawns array is owned
+    // by the host and must stay valid while the manager is being created.
     struct WorldInit {
         MapGrid map;
-        RobotSpawn spawns[limits::maxRobotsPerWorld];
+        const RobotSpawn *spawns;
+        int32_t numSpawns;
     };
 
     static void registerTypes(madrona::ECSRegistry &registry,
@@ -40,6 +43,7 @@ struct Sim : public madrona::WorldBase {
     Sim(Engine &ctx, const Config &cfg, const WorldInit &init);
 
     float dt;
+    madrona::Query<RobotPose, RobotParams, RobotMotion> robotQuery;
 };
 
 class Engine : public ::madrona::CustomContext<Engine, Sim> {

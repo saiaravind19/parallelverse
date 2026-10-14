@@ -24,4 +24,17 @@ PB_BIND(sim2d_msgs_WorldState, sim2d_msgs_WorldState, AUTO)
 PB_BIND(sim2d_msgs_PathCommand, sim2d_msgs_PathCommand, AUTO)
 
 
+PB_BIND(sim2d_msgs_SpawnCommand, sim2d_msgs_SpawnCommand, AUTO)
+
+
+PB_BIND(sim2d_msgs_VelocityCommand, sim2d_msgs_VelocityCommand, AUTO)
+
+
+PB_BIND(sim2d_msgs_ControlModeRequest, sim2d_msgs_ControlModeRequest, AUTO)
+
+
+PB_BIND(sim2d_msgs_ControlModeResponse, sim2d_msgs_ControlModeResponse, AUTO)
+
+
+
 

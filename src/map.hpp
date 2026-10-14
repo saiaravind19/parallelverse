@@ -13,6 +13,10 @@ struct Map {
     float originX = 0.f;
     float originY = 0.f;
     std::vector<uint8_t> occupied; // 1 = wall, 0 = free; row-major
+    // Direction rules from "(a,b,c,d)" cells, row-major like occupied:
+    // bit 0 '^' (+y), bit 1 'v' (-y), bit 2 '>' (+x), bit 3 '<' (-x).
+    // 0 for cells without arrows.
+    std::vector<uint8_t> dirs;
 
     bool isOccupied(int32_t cx, int32_t cy) const
     {

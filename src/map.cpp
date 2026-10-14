@@ -35,7 +35,7 @@ std::vector<std::string> splitCSV(const std::string &line)
 enum class Cell { Empty, Free, Wall, Invalid };
 
 // Layout rules (see docs/layout_rules.md):
-//   "(a,b,c,d)"  drivable cell (tuple is kept for future use, not used here)
+//   "(a,b,c,d)"  drivable cell (arrows are kept as direction rules in Map::dirs)
 //   "0"          drivable cell (legacy occupancy format)
 //   "1"          wall cell (legacy occupancy format)
 //   ""           empty: outside the layout, treated as wall
@@ -92,6 +92,7 @@ bool loadMapCSV(const std::string &path, Map &out, std::string &err)
     out.originX = 0.f;
     out.originY = 0.f;
     out.occupied.assign(width * height, 1); // wall unless drivable
+    out.dirs.assign(width * height, 0);
 
     for (int32_t r = 0; r < height; r++) {
         for (int32_t c = 0; c < width; c++) {
@@ -109,6 +110,16 @@ bool loadMapCSV(const std::string &path, Map &out, std::string &err)
             // File row 0 is the top of the layout; y grows upward.
             bool drivable = k == Cell::Free;
             out.occupied[(height - 1 - r) * width + c] = drivable ? 0 : 1;
+            if (drivable) {
+                uint8_t d = 0;
+                for (char ch : field) {
+                    if (ch == '^') d |= 1;
+                    if (ch == 'v') d |= 2;
+                    if (ch == '>') d |= 4;
+                    if (ch == '<') d |= 8;
+                }
+                out.dirs[(height - 1 - r) * width + c] = d;
+            }
         }
     }
     return true;

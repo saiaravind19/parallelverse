@@ -66,17 +66,15 @@ Other targets: `sim2d_collision_test` (collision tests), `sim2d_bench`
 
 ### 4. Capacity limits (build settings)
 
-Fixed table sizes are set when you configure, not in the source:
+Two table sizes are fixed when you configure:
 
 ```bash
-cmake -S . -B build -DSIM2D_MAX_ROBOTS=512 -DSIM2D_MAX_WAYPOINTS=64 -DSIM2D_MAX_MAP_DIM=128
+cmake -S . -B build -DSIM2D_MAX_WAYPOINTS=64 -DSIM2D_MAX_MAP_DIM=128
 ```
 
-`SIM2D_MAX_ROBOTS` is the most robots in one world, `SIM2D_MAX_WAYPOINTS` the
-longest path, and `SIM2D_MAX_MAP_DIM` the largest map side in cells. Each world
-reserves memory for the full robot capacity, so lower it if you run many small
-worlds. If you change `SIM2D_MAX_ROBOTS`, change `MAX_ROBOTS` in
-`tools/make_scene.py` to match.
+`SIM2D_MAX_WAYPOINTS` is the longest path and `SIM2D_MAX_MAP_DIM` the largest
+map side in cells. The number of robots is not a build setting: you give it when
+you launch (below), and can add more while it runs.
 
 ## Run
 
@@ -84,6 +82,25 @@ worlds. If you change `SIM2D_MAX_ROBOTS`, change `MAX_ROBOTS` in
 cd build
 ./sim2d_app ../scenes/sample.json
 ```
+
+Options:
+
+```bash
+./sim2d_app ../scenes/sample.json --robots 300      # 300 robots in every world, placed for you
+./sim2d_app ../scenes/sample.json --max-robots 1000 # room to add robots later (default: twice the start count)
+```
+
+A scene can also say `"robots": 40` instead of listing each robot. A world never
+holds more robots than its movable cells (cells with an arrow, or all free cells
+if the layout has no arrows). Add robots while it runs with the "Add robots"
+button, `uv run spawn_robots.py <world> --count 20`, or a `/cmd_spawn` message.
+
+In the map view, scroll to zoom around the cursor, drag to pan, and use Fit to
+reset.
+
+Robots take commands as waypoints (default) or velocities. Switch with
+`uv run set_control_mode.py <world> <robot> velocity`; see
+[docs/communication.md](docs/communication.md).
 
 On Linux with no display, run it under a virtual display:
 `xvfb-run -a ./sim2d_app ../scenes/sample.json`.
@@ -103,6 +120,7 @@ direction arrows, robots start only on lane cells, facing the lane direction.
 ```bash
 cd tools
 uv run publish_waypoints.py 0 0 "2.5,9.5 5.5,9.5"   # world 0, robot 0
+uv run publish_velocity.py 0 0 1.0 0.3 --hold 5      # velocity mode only
 ```
 
 ### Test
@@ -110,7 +128,7 @@ uv run publish_waypoints.py 0 0 "2.5,9.5 5.5,9.5"   # world 0, robot 0
 ```bash
 cd build
 ./sim2d_collision_test
-./sim2d_bench 1 300 100      # worlds, robots per world, steps
+./sim2d_bench 1 300 100      # worlds, robots per world, steps [robot slots]
 ```
 
 ## Layout

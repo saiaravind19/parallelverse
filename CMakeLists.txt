@@ -9,9 +9,8 @@ include(dependencies)
 
 add_subdirectory(external)
 
-# Most robots one world can hold. Madrona needs fixed-size tables, so this is a
-# build-time capacity; a scene can use any count up to it.
-set(SIM2D_MAX_ROBOTS 512 CACHE STRING "Robots per world capacity")
+# Madrona needs fixed-size tables, so these are build-time capacities.
+# The number of robots is not here: it is chosen when the app is launched.
 set(SIM2D_MAX_WAYPOINTS 64 CACHE STRING "Waypoints per robot capacity")
 set(SIM2D_MAX_MAP_DIM 128 CACHE STRING "Largest map side in cells")
 
@@ -22,13 +21,14 @@ add_library(sim2d_core STATIC
     src/mgr.cpp src/mgr.hpp
     src/config.cpp src/config.hpp
     src/map.cpp src/map.hpp
+    src/placement.cpp src/world_spec.hpp
+    src/geometry.hpp
     src/profile.hpp
     src/types.hpp
 )
 
 target_include_directories(sim2d_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(sim2d_core PUBLIC
-    SIM2D_MAX_ROBOTS=${SIM2D_MAX_ROBOTS}
     SIM2D_MAX_WAYPOINTS=${SIM2D_MAX_WAYPOINTS}
     SIM2D_MAX_MAP_DIM=${SIM2D_MAX_MAP_DIM})
 

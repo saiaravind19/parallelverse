@@ -1,5 +1,6 @@
 #include "sim.hpp"
 #include "profile.hpp"
+#include "geometry.hpp"
 
 #include <madrona/components.hpp>
 #include <cmath>
@@ -18,35 +19,58 @@ static float wrapAngle(float a)
     return a;
 }
 
-// True if a circle of radius r centred at (x, y) overlaps any wall cell
-// or leaves the map.
-static bool circleHitsWall(const MapGrid &map, float x, float y, float r)
+// ---------- systems ----------
+
+// Put a robot into its slot when the host writes a new spawn command.
+inline void applySpawnSystem(Engine &,
+                             SpawnCmd &cmd,
+                             RobotPose &pose,
+                             RobotParams &params,
+                             RobotMotion &motion,
+                             Path &path)
 {
-    int32_t x0 = (int32_t)std::floor(x - r - map.originX);
-    int32_t x1 = (int32_t)std::floor(x + r - map.originX);
-    int32_t y0 = (int32_t)std::floor(y - r - map.originY);
-    int32_t y1 = (int32_t)std::floor(y + r - map.originY);
+    if (cmd.seq == motion.spawnSeq) return;
 
-    if (x0 < 0 || y0 < 0 || x1 >= map.width || y1 >= map.height) {
-        return true;
-    }
-
-    for (int32_t cy = y0; cy <= y1; cy++) {
-        for (int32_t cx = x0; cx <= x1; cx++) {
-            if (!map.cells[cy * map.width + cx]) continue;
-
-            float minx = map.originX + cx, maxx = minx + 1.f;
-            float miny = map.originY + cy, maxy = miny + 1.f;
-            float qx = std::fmin(std::fmax(x, minx), maxx);
-            float qy = std::fmin(std::fmax(y, miny), maxy);
-            float dx = x - qx, dy = y - qy;
-            if (dx * dx + dy * dy < r * r) return true;
-        }
-    }
-    return false;
+    motion.spawnSeq = cmd.seq;
+    pose = RobotPose { cmd.x, cmd.y, cmd.theta };
+    params = RobotParams { cmd.radius, cmd.vMax, cmd.aMax, cmd.omegaMax };
+    motion.v = 0.f;
+    motion.prevX = cmd.x;
+    motion.prevY = cmd.y;
+    motion.active = 1;
+    motion.stopped = 0;
+    motion.collided = 0;
+    motion.hitRobot = 0;
+    motion.mode = kModeWaypoint;
+    motion.cmdLin = 0.f;
+    motion.cmdAng = 0.f;
+    path.count = 0;
+    path.next = 0;
 }
 
-// ---------- systems ----------
+// Apply a new control mode or velocity setpoint from the host. Switching mode
+// drops the waypoint path and stops the robot. Any new command clears the
+// stopped / collided flags.
+inline void applyControlSystem(Engine &,
+                               ControlCmd &cmd,
+                               Path &path,
+                               RobotMotion &motion)
+{
+    if (!motion.active || cmd.seq == motion.ctrlSeq) return;
+
+    motion.ctrlSeq = cmd.seq;
+    if (cmd.mode != motion.mode) {
+        motion.mode = cmd.mode;
+        motion.v = 0.f;
+        path.count = 0;
+        path.next = 0;
+    }
+    motion.cmdLin = cmd.linear;
+    motion.cmdAng = cmd.angular;
+    motion.stopped = 0;
+    motion.collided = 0;
+    motion.hitRobot = 0;
+}
 
 // Copy a new waypoint list into the robot's path when its sequence number
 // changes. A new command also clears the stopped / collided flags.
@@ -81,6 +105,33 @@ inline void driveSystem(Engine &ctx,
     motion.prevX = pose.x;
     motion.prevY = pose.y;
 
+    float dt = ctx.data().dt;
+
+    if (motion.mode == kModeVelocity) {
+        if (motion.stopped) {
+            motion.v = 0.f;
+            return;
+        }
+        // Ramp the speed toward the setpoint, then move.
+        float target = std::fmin(std::fmax(motion.cmdLin, -params.vMax), params.vMax);
+        float dv = params.aMax * dt;
+        motion.v += std::fmin(std::fmax(target - motion.v, -dv), dv);
+        float w = std::fmin(std::fmax(motion.cmdAng, -params.omegaMax), params.omegaMax);
+        pose.theta = wrapAngle(pose.theta + w * dt);
+
+        float vx = pose.x + std::cos(pose.theta) * motion.v * dt;
+        float vy = pose.y + std::sin(pose.theta) * motion.v * dt;
+        const MapGrid &vmap = ctx.singleton<MapGrid>();
+        if (circleHitsWall(vmap, vx, vy, params.radius)) {
+            motion.stopped = 1;
+            motion.v = 0.f;
+            return;
+        }
+        pose.x = vx;
+        pose.y = vy;
+        return;
+    }
+
     if (motion.stopped || path.next >= path.count) {
         motion.v = 0.f;
         return;
@@ -96,8 +147,6 @@ inline void driveSystem(Engine &ctx,
         motion.v = 0.f;
         return;
     }
-
-    float dt = ctx.data().dt;
 
     // Turn toward the goal, limited by the turn-rate cap.
     float desired = std::atan2(dy, dx);
@@ -131,26 +180,21 @@ inline void driveSystem(Engine &ctx,
 inline void detectCollisionSystem(Engine &ctx,
                                   RobotPose &pose,
                                   RobotParams &params,
-                                  RobotMotion &motion,
-                                  OtherRobots &others)
+                                  RobotMotion &motion)
 {
     motion.collided = 0;
     if (!motion.active) return;
 
-    for (CountT i = 0; i < limits::maxRobotsPerWorld - 1; i++) {
-        Entity o = others.e[i];
-        if (!ctx.get<RobotMotion>(o).active) continue;
-
-        RobotPose op = ctx.get<RobotPose>(o);
-        RobotParams oparams = ctx.get<RobotParams>(o);
-        float dx = pose.x - op.x;
-        float dy = pose.y - op.y;
-        float rr = params.radius + oparams.radius;
-        if (dx * dx + dy * dy < rr * rr) {
-            motion.collided = 1;
-            return;
-        }
-    }
+    bool hit = false;
+    ctx.iterateQuery(ctx.data().robotQuery,
+        [&](RobotPose &op, RobotParams &oparams, RobotMotion &omotion) {
+            if (hit || &op == &pose || !omotion.active) return;
+            float dx = pose.x - op.x;
+            float dy = pose.y - op.y;
+            float rr = params.radius + oparams.radius;
+            if (dx * dx + dy * dy < rr * rr) hit = true;
+        });
+    motion.collided = hit ? 1 : 0;
 }
 
 // Undo this step's move for any robot in contact, and stop it. Both robots
@@ -185,6 +229,7 @@ inline void statusSystem(Engine &,
     state.collided = motion.collided;
     state.hitRobot = motion.hitRobot;
     state.active = motion.active;
+    state.mode = motion.mode;
 }
 
 // ---------- registration and task graph ----------
@@ -199,7 +244,8 @@ void Sim::registerTypes(ECSRegistry &registry, const Config &)
     registry.registerComponent<Path>();
     registry.registerComponent<WaypointCmd>();
     registry.registerComponent<RobotState>();
-    registry.registerComponent<OtherRobots>();
+    registry.registerComponent<SpawnCmd>();
+    registry.registerComponent<ControlCmd>();
 
     registry.registerSingleton<MapGrid>();
 
@@ -209,16 +255,30 @@ void Sim::registerTypes(ECSRegistry &registry, const Config &)
         (uint32_t)ExportID::WaypointCmd);
     registry.exportColumn<Robot, RobotState>(
         (uint32_t)ExportID::RobotState);
+    registry.exportColumn<Robot, SpawnCmd>(
+        (uint32_t)ExportID::SpawnCmd);
+    registry.exportColumn<Robot, ControlCmd>(
+        (uint32_t)ExportID::ControlCmd);
 }
 
 void Sim::setupTasks(TaskGraphManager &taskgraph_mgr, const Config &)
 {
     TaskGraphBuilder &builder = taskgraph_mgr.init(TaskGraphID::Step);
 
+    auto spawn = builder.addToGraph<ParallelForNode<Engine,
+        applySpawnSystem,
+            SpawnCmd, RobotPose, RobotParams, RobotMotion, Path
+        >>({});
+
+    auto control = builder.addToGraph<ParallelForNode<Engine,
+        applyControlSystem,
+            ControlCmd, Path, RobotMotion
+        >>({spawn});
+
     auto apply = builder.addToGraph<ParallelForNode<Engine,
         applyCommandSystem,
             WaypointCmd, Path, RobotMotion
-        >>({});
+        >>({control});
 
     auto drive = builder.addToGraph<ParallelForNode<Engine,
         driveSystem,
@@ -227,7 +287,7 @@ void Sim::setupTasks(TaskGraphManager &taskgraph_mgr, const Config &)
 
     auto detect = builder.addToGraph<ParallelForNode<Engine,
         detectCollisionSystem,
-            RobotPose, RobotParams, RobotMotion, OtherRobots
+            RobotPose, RobotParams, RobotMotion
         >>({drive});
 
     auto resolve = builder.addToGraph<ParallelForNode<Engine,
@@ -247,19 +307,18 @@ Sim::Sim(Engine &ctx, const Config &cfg, const WorldInit &init)
     : WorldBase(ctx)
 {
     dt = cfg.dt;
+    robotQuery = ctx.query<RobotPose, RobotParams, RobotMotion>();
 
     ctx.singleton<MapGrid>() = init.map;
 
     // Create a fixed number of slots per world so exported buffers have a
-    // stable shape. Unused slots have active = 0.
-    Entity robots[limits::maxRobotsPerWorld];
-    for (CountT i = 0; i < limits::maxRobotsPerWorld; i++) {
-        robots[i] = ctx.makeEntity<Robot>();
-    }
+    // stable shape. Slots without a spawn start inactive and are filled at
+    // run time through SpawnCmd.
+    for (CountT i = 0; i < (CountT)cfg.maxRobots; i++) {
+        Entity e = ctx.makeEntity<Robot>();
 
-    for (CountT i = 0; i < limits::maxRobotsPerWorld; i++) {
-        Entity e = robots[i];
-        const Sim::RobotSpawn &s = init.spawns[i];
+        RobotSpawn s {};
+        if (i < (CountT)init.numSpawns) s = init.spawns[i];
 
         ctx.get<RobotPose>(e) = RobotPose { s.x, s.y, s.theta };
         ctx.get<RobotParams>(e) = RobotParams {
@@ -275,13 +334,8 @@ Sim::Sim(Engine &ctx, const Config &cfg, const WorldInit &init)
         ctx.get<Path>(e) = Path {};
         ctx.get<WaypointCmd>(e) = WaypointCmd {};
         ctx.get<RobotState>(e) = RobotState {};
-
-        OtherRobots others {};
-        CountT k = 0;
-        for (CountT j = 0; j < limits::maxRobotsPerWorld; j++) {
-            if (j != i) others.e[k++] = robots[j];
-        }
-        ctx.get<OtherRobots>(e) = others;
+        ctx.get<SpawnCmd>(e) = SpawnCmd {};
+        ctx.get<ControlCmd>(e) = ControlCmd {};
     }
 }
 
