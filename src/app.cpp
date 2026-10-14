@@ -3,7 +3,7 @@
 //
 // Usage: sim2d_app [scene.json] [--robots N] [--max-robots M]
 //   --robots N      start every world with N automatically placed robots
-//   --max-robots M  robot slots per world (default: room to grow)
+//   --max-robots M  robot slots per world (default: every movable cell)
 //   state   PUB tcp://*:5555  topic "/world_<w>/state"  protobuf WorldState
 //   command SUB tcp://*:5556  topics "/cmd_path"   protobuf PathCommand
 //                                    "/cmd_spawn"  protobuf SpawnCommand

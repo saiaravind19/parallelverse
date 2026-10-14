@@ -87,7 +87,7 @@ Options:
 
 ```bash
 ./sim2d_app ../scenes/sample.json --robots 300      # 300 robots in every world, placed for you
-./sim2d_app ../scenes/sample.json --max-robots 1000 # room to add robots later (default: twice the start count)
+./sim2d_app ../scenes/sample.json --max-robots 300  # optional: cap the slots for more speed (default: every movable cell)
 ```
 
 A scene can also say `"robots": 40` instead of listing each robot. A world never

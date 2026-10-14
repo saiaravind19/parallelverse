@@ -27,7 +27,8 @@ Manager::Manager(const Config &cfg, const std::vector<WorldSpec> &worlds)
         movable_[i] = countMovableCells(specs_[i]);
         most_cells = std::max(most_cells, movable_[i]);
     }
-    if (maxRobots_ <= 0) maxRobots_ = defaultCapacity(initial);
+    // Default: room for every movable cell, so adding never hits a limit.
+    if (maxRobots_ <= 0) maxRobots_ = most_cells;
     // No world has room for more robots than it has movable cells.
     if (maxRobots_ > most_cells) maxRobots_ = most_cells;
     if (maxRobots_ < initial) maxRobots_ = initial;
