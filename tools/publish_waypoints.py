@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Send a path to one robot in a running sim2d_app (protobuf over ZeroMQ).
+"""Send a path to one robot in a running parallelverse (protobuf over ZeroMQ).
 
 The app listens on /cmd_path for sim2d_msgs.PathCommand messages
 (proto/sim2d_msgs.proto). This script connects a PUB socket and sends one.
@@ -42,7 +42,7 @@ def main():
     ap.add_argument("world", nargs="?", type=int)
     ap.add_argument("robot", nargs="?", type=int)
     ap.add_argument("waypoints", nargs="?")
-    ap.add_argument("--host", default="localhost", help="machine running sim2d_app")
+    ap.add_argument("--host", default="localhost", help="machine running parallelverse")
     ap.add_argument("--port", type=int, default=5556)
     args = ap.parse_args()
 

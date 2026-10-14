@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add robots to a running sim2d_app (protobuf over ZeroMQ, topic /cmd_spawn).
+"""Add robots to a running parallelverse (protobuf over ZeroMQ, topic /cmd_spawn).
 
 Usage:
     uv run spawn_robots.py <world> --count 20            # placed automatically

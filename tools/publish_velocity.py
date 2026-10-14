@@ -30,7 +30,7 @@ def main():
     ap.add_argument("--hold", type=float, default=0.0,
                     help="keep sending for this many seconds, then send a stop")
     ap.add_argument("--rate", type=float, default=10.0, help="messages per second with --hold")
-    ap.add_argument("--host", default="localhost", help="machine running sim2d_app")
+    ap.add_argument("--host", default="localhost", help="machine running parallelverse")
     ap.add_argument("--port", type=int, default=5556)
     args = ap.parse_args()
 

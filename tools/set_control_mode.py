@@ -60,14 +60,14 @@ def main():
     ap.add_argument("world", help="world name or index")
     ap.add_argument("robot", type=int)
     ap.add_argument("mode", choices=sorted(MODES))
-    ap.add_argument("--host", default="localhost", help="machine running sim2d_app")
+    ap.add_argument("--host", default="localhost", help="machine running parallelverse")
     ap.add_argument("--port", type=int, default=5557)
     args = ap.parse_args()
 
     try:
         resp = request_mode(args.world, args.robot, MODES[args.mode], args.host, args.port)
     except zmq.Again:
-        sys.exit("No reply from the sim. Is sim2d_app running (and is the host/port right)?")
+        sys.exit("No reply from the sim. Is parallelverse running (and is the host/port right)?")
 
     where = f"world '{resp.world_name}' ({resp.world_id}) robot {resp.robot_id}" \
         if resp.world_name else f"world {args.world} robot {args.robot}"

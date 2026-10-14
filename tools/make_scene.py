@@ -191,7 +191,7 @@ def main_cli():
         sys.exit(str(e))
     print(f"Wrote {out_path}")
     print(f"Map {width} x {height} cells, {n_free} drivable, {count} robot(s).")
-    print(f"Run: ./sim2d_app \"{out_path}\"")
+    print(f"Run: ./parallelverse \"{out_path}\"")
 
 
 try:
@@ -268,7 +268,7 @@ if HAVE_QT:
             self.status.setText(
                 f"Wrote {out}\nMap {w} x {h} cells, {n_free} drivable, "
                 f"{self.robots.value()} robot(s).\n"
-                f"Run: ./sim2d_app \"{out}\"")
+                f"Run: ./parallelverse \"{out}\"")
 
 
 def main():

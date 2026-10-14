@@ -20,7 +20,7 @@ the same ports. Subscribe with the full topic, e.g. `/world_1/state`, so that
 ```mermaid
 sequenceDiagram
     participant F as Fleet process (one per world)
-    participant S as sim2d_app main loop
+    participant S as parallelverse main loop
     participant M as Madrona manager (ECS)
 
     loop every frame

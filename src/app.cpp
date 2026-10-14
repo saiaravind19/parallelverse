@@ -1,7 +1,7 @@
-// sim2d_app: batch sim with a top-down GUI, ZeroMQ state/command channels,
+// parallelverse: batch sim with a top-down GUI, ZeroMQ state/command channels,
 // and a Record button that writes an MP4 via ffmpeg.
 //
-// Usage: sim2d_app [scene.json] [--robots N] [--max-robots M]
+// Usage: parallelverse [scene.json] [--robots N] [--max-robots M]
 //   --robots N      start every world with N automatically placed robots
 //   --max-robots M  robot slots per world (default: every movable cell)
 //   state   PUB tcp://*:5555  topic "/world_<w>/state"  protobuf WorldState
@@ -370,7 +370,7 @@ int main(int argc, char **argv)
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 #endif
-    GLFWwindow *window = glfwCreateWindow(kWinW, kWinH, "sim2d", nullptr, nullptr);
+    GLFWwindow *window = glfwCreateWindow(kWinW, kWinH, "parallelverse", nullptr, nullptr);
     if (!window) {
         fprintf(stderr, "could not create window (is DISPLAY set?)\n");
         return 1;

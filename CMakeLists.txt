@@ -79,9 +79,9 @@ target_include_directories(sim2d_msgs PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/gen
 )
 
-add_executable(sim2d_app src/app.cpp)
-target_include_directories(sim2d_app PRIVATE ${ZMQ_INCLUDE_DIR})
-target_link_libraries(sim2d_app PRIVATE sim2d_msgs sim2d_core sim2d_imgui ${ZMQ_LIBRARY})
+add_executable(parallelverse src/app.cpp)
+target_include_directories(parallelverse PRIVATE ${ZMQ_INCLUDE_DIR})
+target_link_libraries(parallelverse PRIVATE sim2d_msgs sim2d_core sim2d_imgui ${ZMQ_LIBRARY})
 
 add_executable(sim2d_map_check src/map_check.cpp)
 target_link_libraries(sim2d_map_check PRIVATE sim2d_core)

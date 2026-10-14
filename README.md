@@ -1,5 +1,7 @@
 # multi_world_sim
 
+The simulator app is called `parallelverse`.
+
 A 2D batch simulator for mobile-robot fleets, built on the
 [Madrona](https://github.com/shacklettbp/madrona) engine's ECS. Many worlds run
 in one process. Each world is loaded from a CSV layout, holds up to hundreds of
@@ -58,7 +60,7 @@ git submodule update --init --recursive
 
 ```bash
 cmake -S . -B build
-cmake --build build -j --target sim2d_app
+cmake --build build -j --target parallelverse
 ```
 
 Other targets: `sim2d_collision_test` (collision tests), `sim2d_bench`
@@ -80,14 +82,14 @@ you launch (below), and can add more while it runs.
 
 ```bash
 cd build
-./sim2d_app ../scenes/sample.json
+./parallelverse ../scenes/sample.json
 ```
 
 Options:
 
 ```bash
-./sim2d_app ../scenes/sample.json --robots 300      # 300 robots in every world, placed for you
-./sim2d_app ../scenes/sample.json --max-robots 300  # optional: cap the slots for more speed (default: every movable cell)
+./parallelverse ../scenes/sample.json --robots 300      # 300 robots in every world, placed for you
+./parallelverse ../scenes/sample.json --max-robots 300  # optional: cap the slots for more speed (default: every movable cell)
 ```
 
 Slots per world come from `--max-robots`, else every movable cell; they never exceed the movable cells.
@@ -105,7 +107,7 @@ Robots take commands as waypoints (default) or velocities. Switch with
 [docs/communication.md](docs/communication.md).
 
 On Linux with no display, run it under a virtual display:
-`xvfb-run -a ./sim2d_app ../scenes/sample.json`.
+`xvfb-run -a ./parallelverse ../scenes/sample.json`.
 
 ### Make a scene from a layout
 

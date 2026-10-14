@@ -2,7 +2,7 @@
 
 `make_scene.py` builds a scene file for the simulator from one layout CSV.
 You give it the CSV and the number of robots. It writes a `*_scene.json`
-file next to the CSV, which `sim2d_app` can open.
+file next to the CSV, which `parallelverse` can open.
 
 ## What you need
 
@@ -44,13 +44,13 @@ file next to the CSV, which `sim2d_app` can open.
    ```
    Wrote /Users/you/.../maps/layout_sample_scene.json
    Map 8 x 35 cells, 178 drivable, 3 robot(s).
-   Run: ./sim2d_app "/Users/you/.../maps/layout_sample_scene.json"
+   Run: ./parallelverse "/Users/you/.../maps/layout_sample_scene.json"
    ```
 
 5. Start the simulator with that scene file, from the build folder:
 
    ```
-   ./sim2d_app "/Users/you/.../maps/layout_sample_scene.json"
+   ./parallelverse "/Users/you/.../maps/layout_sample_scene.json"
    ```
 
 ## What the scene file contains
@@ -114,7 +114,7 @@ To check a layout by itself:
 | `layout has only N drivable cells, need M` | Use fewer robots, or add drivable cells to the CSV. |
 | `no drivable or wall cells found in the layout` | The CSV is empty or not in the expected format. |
 
-If `sim2d_app` says `scene error`, the scene file path is probably wrong.
+If `parallelverse` says `scene error`, the scene file path is probably wrong.
 Use the full path it printed.
 
 ## Limits
