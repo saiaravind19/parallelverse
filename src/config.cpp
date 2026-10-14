@@ -31,7 +31,7 @@ static bool readDefaults(const json &j, RobotDefaults &d, std::string &err)
 bool loadScene(const std::string &path, float &dt,
                std::vector<WorldSpec> &worlds,
                std::vector<std::string> &names, std::string &err,
-               int robotsOverride)
+               int robotsOverride, int *maxRobotsOut)
 {
     std::ifstream f(path);
     if (!f) {
@@ -47,6 +47,7 @@ bool loadScene(const std::string &path, float &dt,
     }
 
     dt = root.value("dt", 0.04f);
+    if (maxRobotsOut) *maxRobotsOut = root.value("max_robots", 0);
     if (!(dt > 0.f)) {
         err = "dt must be > 0";
         return false;

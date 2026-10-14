@@ -10,6 +10,7 @@ namespace sim2d {
 // Load a scene file. Format (JSON):
 // {
 //   "dt": 0.04,
+//   "max_robots": 300,             // optional robot slots per world (default: movable cells)
 //   "worlds": [
 //     {
 //       "name": "open room",           // optional, default = map file name
@@ -29,6 +30,6 @@ namespace sim2d {
 bool loadScene(const std::string &path, float &dt,
                std::vector<WorldSpec> &worlds,
                std::vector<std::string> &names, std::string &err,
-               int robotsOverride = -1);
+               int robotsOverride = -1, int *maxRobotsOut = nullptr);
 
 }
