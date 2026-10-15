@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""Generate a sim2d scene JSON for one layout CSV.
+"""Generate a scene JSON from one or more layout CSVs (one world per layout).
 
-    python3 make_scene.py          opens a window (needs PyQt5 or PyQt6)
-    python3 make_scene.py --cli    asks for the layout path and robot count
+    python3 make_scene.py          opens a window (needs PyQt5 or PyQt6); add
+                                   several layouts and set robots for each
+    python3 make_scene.py --cli    asks for layout paths and robot counts
+    python3 make_scene.py --map a.csv:20 --map b.csv:50 --out fleet.json
 
-Either way it writes <layout_name>_scene.json next to the CSV file.
+The scene goes in scenes/ beside the maps/ folder (or next to the first CSV).
+With one layout it is <layout_name>_scene.json; with several,
+multi_<n>_maps_scene.json unless you name it. World ids follow the order of the
+layouts.
 
 Cell rules (same as the simulator):
   "(a,b,c,d)" or "0"  -> drivable
@@ -127,84 +132,150 @@ def pick_spawns(width, height, free, count):
     return chosen
 
 
-def write_scene(layout, count):
-    """Write the scene JSON and return (out_path, width, height, n_free).
+def default_scene_dir(layout):
+    """scenes/ beside the maps/ folder when the CSV is in maps/, else next to the CSV."""
+    csv_dir = os.path.dirname(os.path.abspath(layout))
+    if os.path.basename(csv_dir) == "maps":
+        scene_dir = os.path.join(os.path.dirname(csv_dir), "scenes")
+        os.makedirs(scene_dir, exist_ok=True)
+        return scene_dir
+    return csv_dir
 
-    The scene goes in a scenes/ folder beside the maps/ folder when the CSV is
-    in maps/ (the layout used by the sample scenes). Otherwise it goes next to
-    the CSV. The map path in the scene is relative to the scene file.
-    """
+
+def build_world(layout, count, scene_dir, name):
+    """One world entry for the scene. Returns (world, width, height, n_free)."""
     width, height, free = load_layout(layout)
     if count < 1:
-        raise ValueError("number of robots must be at least 1")
+        raise ValueError(f"{os.path.basename(layout)}: number of robots must be at least 1")
     if count > len(free):
-        raise ValueError(f"layout has only {len(free)} movable cells, "
-                         f"cannot place {count} robots")
+        raise ValueError(f"{os.path.basename(layout)}: layout has only {len(free)} "
+                         f"movable cells, cannot place {count} robots")
     spawns = None
     if any(free.values()):  # layout has direction rules: stay on its lanes
         spawns = pick_lane_spawns(free, count)
         if spawns is None:
-            raise ValueError(f"layout has fewer than {count} lane cells to start on")
+            raise ValueError(f"{os.path.basename(layout)}: fewer than {count} "
+                             f"lane cells to start on")
     if spawns is None:
         spawns = [(x, y, 0.0) for (x, y) in pick_spawns(width, height, free, count)]
 
-    csv_abs = os.path.abspath(layout)
-    csv_dir = os.path.dirname(csv_abs)
-    stem = os.path.splitext(os.path.basename(csv_abs))[0]
-    if os.path.basename(csv_dir) == "maps":
-        scene_dir = os.path.join(os.path.dirname(csv_dir), "scenes")
-        os.makedirs(scene_dir, exist_ok=True)
-    else:
-        scene_dir = csv_dir
-    map_rel = os.path.relpath(csv_abs, scene_dir).replace(os.sep, "/")
-
+    map_rel = os.path.relpath(os.path.abspath(layout), scene_dir).replace(os.sep, "/")
     robots = [{
         "x": x + 0.5, "y": y + 0.5, "theta": round(theta, 4),
         "radius": RADIUS, "vmax": VMAX, "amax": AMAX, "omegamax": OMEGAMAX,
     } for (x, y, theta) in spawns]
+    return {"name": name, "map": map_rel, "robots": robots}, width, height, len(free)
 
-    scene = {
-        "dt": DT,
-        "worlds": [{"name": stem, "map": map_rel, "robots": robots}],
-    }
 
-    out_path = os.path.join(scene_dir, f"{stem}_scene.json")
+def write_scene(layouts, out_path=None):
+    """Write one scene with a world per layout.
+
+    layouts is a list of (csv_path, robot_count). Returns (out_path, info) where
+    info is a list of (name, width, height, n_free, count), one per world.
+    The scene goes in a scenes/ folder beside maps/ (or next to the first CSV)
+    unless out_path is given. Map paths in the scene are relative to the scene.
+    """
+    if not layouts:
+        raise ValueError("choose at least one layout")
+    if out_path:
+        out_path = os.path.abspath(out_path)
+        scene_dir = os.path.dirname(out_path)
+        os.makedirs(scene_dir, exist_ok=True)
+    else:
+        scene_dir = default_scene_dir(layouts[0][0])
+        if len(layouts) == 1:
+            stem = os.path.splitext(os.path.basename(layouts[0][0]))[0]
+            out_path = os.path.join(scene_dir, f"{stem}_scene.json")
+        else:
+            out_path = os.path.join(scene_dir, f"multi_{len(layouts)}_maps_scene.json")
+
+    worlds, info, used = [], [], {}
+    for path, count in layouts:
+        stem = os.path.splitext(os.path.basename(path))[0]
+        n = used.get(stem, 0)
+        used[stem] = n + 1
+        name = stem if n == 0 else f"{stem}_{n + 1}"  # world names must be unique
+        world, w, h, n_free = build_world(path, count, scene_dir, name)
+        worlds.append(world)
+        info.append((name, w, h, n_free, count))
+
     with open(out_path, "w") as f:
-        json.dump(scene, f, indent=2)
+        json.dump({"dt": DT, "worlds": worlds}, f, indent=2)
         f.write("\n")
-    return out_path, width, height, len(free)
+    return out_path, info
 
 
-def main_cli():
-    layout = input("Layout CSV path: ").strip().strip('"').strip("'")
-    layout = os.path.expanduser(layout)
-    if not os.path.isfile(layout):
-        sys.exit(f"File not found: {layout}")
+def describe(out_path, info):
+    lines = [f"Wrote {out_path}"]
+    for i, (name, w, h, n_free, count) in enumerate(info):
+        lines.append(f"  world {i}: {name}  {w} x {h} cells, {n_free} movable, {count} robot(s)")
+    lines.append(f"Run: ./parallelverse \"{out_path}\"")
+    return "\n".join(lines)
+
+
+def parse_map_arg(text):
+    """'path.csv' or 'path.csv:20' -> (path, count or None)."""
+    path, sep, tail = text.rpartition(":")
+    if sep and tail.isdigit() and path:
+        return os.path.expanduser(path), int(tail)
+    return os.path.expanduser(text), None
+
+
+def main_cli(map_args=None, out_path=None, default_count=None):
+    layouts = []
+    if map_args:
+        for text in map_args:
+            path, count = parse_map_arg(text)
+            if not os.path.isfile(path):
+                sys.exit(f"File not found: {path}")
+            if count is None:
+                count = default_count
+            if count is None:
+                sys.exit(f"No robot count for {path}: use PATH:COUNT or --robots N")
+            layouts.append((path, count))
+    else:
+        print("Enter one layout CSV path per line. Empty line when done.")
+        while True:
+            path = input(f"Layout CSV path #{len(layouts) + 1}: ").strip().strip('"').strip("'")
+            if not path:
+                break
+            path = os.path.expanduser(path)
+            if not os.path.isfile(path):
+                print(f"File not found: {path}")
+                continue
+            try:
+                count = int(input("  Number of robots: ").strip())
+            except ValueError:
+                print("  Must be a whole number; layout skipped.")
+                continue
+            layouts.append((path, count))
     try:
-        count = int(input("Number of robots: ").strip())
-    except ValueError:
-        sys.exit("Number of robots must be a whole number.")
-
-    try:
-        out_path, width, height, n_free = write_scene(layout, count)
+        out, info = write_scene(layouts, out_path)
     except ValueError as e:
         sys.exit(str(e))
-    print(f"Wrote {out_path}")
-    print(f"Map {width} x {height} cells, {n_free} drivable, {count} robot(s).")
-    print(f"Run: ./parallelverse \"{out_path}\"")
+    print(describe(out, info))
 
 
 try:
     try:
-        from PyQt5.QtWidgets import (QApplication, QFileDialog, QFormLayout,
-                                     QLabel, QMainWindow, QPushButton,
-                                     QSpinBox, QVBoxLayout, QWidget)
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import (QApplication, QFileDialog, QHBoxLayout,
+                                     QHeaderView, QLabel, QLineEdit, QMainWindow,
+                                     QPushButton, QSpinBox, QTableWidget,
+                                     QTableWidgetItem, QVBoxLayout, QWidget)
         _QT_EXEC = "exec_"
     except ImportError:
-        from PyQt6.QtWidgets import (QApplication, QFileDialog, QFormLayout,
-                                     QLabel, QMainWindow, QPushButton,
-                                     QSpinBox, QVBoxLayout, QWidget)
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout,
+                                     QHeaderView, QLabel, QLineEdit, QMainWindow,
+                                     QPushButton, QSpinBox, QTableWidget,
+                                     QTableWidgetItem, QVBoxLayout, QWidget)
         _QT_EXEC = "exec"
+    try:  # PyQt5 spelling
+        _STRETCH, _EDITABLE = QHeaderView.Stretch, Qt.ItemIsEditable
+    except AttributeError:  # PyQt6 spelling
+        _STRETCH = QHeaderView.ResizeMode.Stretch
+        _EDITABLE = Qt.ItemFlag.ItemIsEditable
     HAVE_QT = True
 except ImportError:
     HAVE_QT = False
@@ -215,17 +286,30 @@ if HAVE_QT:
         def __init__(self):
             super().__init__()
             self.setWindowTitle("make_scene")
-            self.resize(560, 220)
-            self.layout_path = ""
+            self.resize(720, 460)
 
-            self.path_label = QLabel("No layout chosen")
-            self.path_label.setWordWrap(True)
-            browse = QPushButton("Choose layout CSV...")
-            browse.clicked.connect(self.choose_layout)
+            add = QPushButton("Add layouts...")
+            add.clicked.connect(self.add_layouts)
+            remove = QPushButton("Remove selected")
+            remove.clicked.connect(self.remove_selected)
+            self.default_robots = QSpinBox()
+            self.default_robots.setRange(1, 100000)
+            self.default_robots.setValue(3)
+            top = QHBoxLayout()
+            top.addWidget(add)
+            top.addWidget(remove)
+            top.addStretch(1)
+            top.addWidget(QLabel("Robots for new layouts:"))
+            top.addWidget(self.default_robots)
 
-            self.robots = QSpinBox()
-            self.robots.setRange(1, 100000)  # checked against the layout on Create
-            self.robots.setValue(3)
+            self.table = QTableWidget(0, 2)
+            self.table.setHorizontalHeaderLabels(["Layout CSV (one world each)", "Robots"])
+            self.table.horizontalHeader().setStretchLastSection(False)
+            self.table.horizontalHeader().setSectionResizeMode(0, _STRETCH)
+            self.table.setColumnWidth(1, 110)
+
+            self.out_name = QLineEdit()
+            self.out_name.setPlaceholderText("scene file name (optional, e.g. fleet.json)")
 
             generate = QPushButton("Generate scene")
             generate.clicked.connect(self.generate)
@@ -233,54 +317,78 @@ if HAVE_QT:
             self.status = QLabel("")
             self.status.setWordWrap(True)
 
-            form = QFormLayout()
-            form.addRow("Layout:", browse)
-            form.addRow("", self.path_label)
-            form.addRow("Robots:", self.robots)
-
             root = QVBoxLayout()
-            root.addLayout(form)
+            root.addLayout(top)
+            root.addWidget(self.table, 1)
+            root.addWidget(self.out_name)
             root.addWidget(generate)
             root.addWidget(self.status)
-            root.addStretch(1)
 
             central = QWidget()
             central.setLayout(root)
             self.setCentralWidget(central)
 
-        def choose_layout(self):
-            path, _ = QFileDialog.getOpenFileName(
-                self, "Choose layout CSV", "", "CSV files (*.csv);;All files (*)")
-            if path:
-                self.layout_path = path
-                self.path_label.setText(path)
+        def add_layouts(self):
+            paths, _ = QFileDialog.getOpenFileNames(
+                self, "Choose layout CSVs (select several)", "",
+                "CSV files (*.csv);;All files (*)")
+            for path in paths:
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                item = QTableWidgetItem(path)
+                item.setFlags(item.flags() & ~_EDITABLE)
+                self.table.setItem(row, 0, item)
+                spin = QSpinBox()
+                spin.setRange(1, 100000)  # checked against the layout on generate
+                spin.setValue(self.default_robots.value())
+                self.table.setCellWidget(row, 1, spin)
+            if paths:
                 self.status.setText("")
 
+        def remove_selected(self):
+            rows = sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True)
+            for r in rows:
+                self.table.removeRow(r)
+
         def generate(self):
-            if not self.layout_path or not os.path.isfile(self.layout_path):
-                self.status.setText("Choose a layout CSV first.")
+            layouts = []
+            for r in range(self.table.rowCount()):
+                layouts.append((self.table.item(r, 0).text(),
+                                self.table.cellWidget(r, 1).value()))
+            if not layouts:
+                self.status.setText("Add at least one layout CSV first.")
                 return
+            out_path = None
+            name = self.out_name.text().strip()
+            if name:
+                if not name.endswith(".json"):
+                    name += ".json"
+                out_path = os.path.join(default_scene_dir(layouts[0][0]), name)
             try:
-                out, w, h, n_free = write_scene(self.layout_path, self.robots.value())
+                out, info = write_scene(layouts, out_path)
             except ValueError as e:
                 self.status.setText(f"Could not make the scene: {e}")
                 return
-            self.status.setText(
-                f"Wrote {out}\nMap {w} x {h} cells, {n_free} drivable, "
-                f"{self.robots.value()} robot(s).\n"
-                f"Run: ./parallelverse \"{out}\"")
+            self.status.setText(describe(out, info))
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Make a sim2d scene from a layout CSV.")
+    parser = argparse.ArgumentParser(
+        description="Make a sim2d scene (one world per layout CSV).")
     parser.add_argument("--cli", action="store_true",
                         help="use terminal prompts instead of the window")
+    parser.add_argument("--map", action="append", metavar="PATH[:COUNT]",
+                        help="a layout CSV with its robot count; repeat for several "
+                             "maps (no prompts)")
+    parser.add_argument("--robots", type=int, metavar="N",
+                        help="robot count for --map entries without :COUNT")
+    parser.add_argument("--out", metavar="FILE", help="scene file to write")
     args = parser.parse_args()
-    if args.cli or not HAVE_QT:
-        if not args.cli:
+    if args.map or args.cli or not HAVE_QT:
+        if not (args.map or args.cli):
             print("PyQt5/PyQt6 not found; using terminal prompts. "
                   "Install PyQt5 for the window.")
-        main_cli()
+        main_cli(args.map, args.out, args.robots)
         return
     app = QApplication(sys.argv)
     win = MakeSceneWindow()

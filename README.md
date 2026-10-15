@@ -113,7 +113,8 @@ On Linux with no display, run it under a virtual display:
 
 ```bash
 cd tools
-uv run make_scene.py          # opens a window; add --cli for terminal prompts
+uv run make_scene.py          # window: add several layouts, set robots per layout
+uv run make_scene.py --map a.csv:20 --map b.csv:50 --out fleet.json   # no window
 ```
 
 See [docs/make_scene_guide.md](docs/make_scene_guide.md). For layouts with
