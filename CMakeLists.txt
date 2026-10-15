@@ -42,7 +42,7 @@ target_link_libraries(sim2d_core
 add_executable(sim2d_collision_test src/collision_test.cpp)
 target_link_libraries(sim2d_collision_test PRIVATE sim2d_core)
 
-# ---- GUI app (top-down view, ZeroMQ, Record) ----
+# ---- GUI app (top-down view, ZeroMQ) ----
 find_package(glfw3 REQUIRED)
 find_package(OpenGL REQUIRED)
 

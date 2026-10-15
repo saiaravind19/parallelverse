@@ -1,5 +1,5 @@
-// parallelverse: batch sim with a top-down GUI, ZeroMQ state/command channels,
-// and a Record button that writes an MP4 via ffmpeg.
+// parallelverse: batch sim with a top-down GUI (resizable, full screen, minimise)
+// and ZeroMQ state/command channels.
 //
 // Usage: parallelverse [scene.json] [--robots N] [--max-robots M]
 //   --robots N      start every world with N automatically placed robots
@@ -26,10 +26,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <ctime>
 #include <string>
 #include <vector>
-#include <sys/stat.h>
 
 #include "config.hpp"
 #include "mgr.hpp"
@@ -40,7 +38,6 @@ namespace {
 
 constexpr int kWinW = 1280;
 constexpr int kWinH = 800;
-constexpr int kRecordFps = 25;
 
 // Topics use ROS-style names: /world_<w>/state and /cmd_path.
 // Bodies are protobuf (proto/sim2d_msgs.proto), encoded with nanopb.
@@ -263,42 +260,6 @@ void serveControlMode(void *rep, Manager &mgr, const std::vector<std::string> &n
     zmq_send(rep, out, os.bytes_written, 0);
 }
 
-struct Recording {
-    FILE *pipe = nullptr;
-    std::string path;
-
-    bool start(int w, int h, uint32_t world)
-    {
-        mkdir("recordings", 0755);
-        char stamp[32];
-        std::time_t t = std::time(nullptr);
-        std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", std::localtime(&t));
-        path = "recordings/world" + std::to_string(world) + "_" + stamp + ".mp4";
-        std::string cmd =
-            "ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgba -s " +
-            std::to_string(w) + "x" + std::to_string(h) +
-            " -r " + std::to_string(kRecordFps) +
-            " -i - -vf vflip -c:v libx264 -pix_fmt yuv420p -preset veryfast " +
-            path;
-        pipe = popen(cmd.c_str(), "w");
-        return pipe != nullptr;
-    }
-
-    void writeFrame(int w, int h, std::vector<unsigned char> &buf)
-    {
-        buf.resize((size_t)w * h * 4);
-        glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, buf.data());
-        fwrite(buf.data(), 1, buf.size(), pipe);
-    }
-
-    void stop()
-    {
-        if (pipe) pclose(pipe);
-        pipe = nullptr;
-    }
-};
-
 } // namespace
 
 int main(int argc, char **argv)
@@ -362,7 +323,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "glfwInit failed\n");
         return 1;
     }
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 #ifdef __APPLE__
     // macOS only offers OpenGL 3.2+ core profiles.
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -378,6 +339,28 @@ int main(int argc, char **argv)
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
 
+    // Full screen on the monitor the window is on; remembers the window
+    // position and size to come back to.
+    bool fullscreen = false;
+    int savedX = 100, savedY = 100, savedW = kWinW, savedH = kWinH;
+    auto toggleFullscreen = [&]() {
+        if (!fullscreen) {
+            glfwGetWindowPos(window, &savedX, &savedY);
+            glfwGetWindowSize(window, &savedW, &savedH);
+            GLFWmonitor *mon = glfwGetPrimaryMonitor();
+            const GLFWvidmode *mode = mon ? glfwGetVideoMode(mon) : nullptr;
+            if (!mode) return;
+            glfwSetWindowMonitor(window, mon, 0, 0, mode->width, mode->height,
+                                 mode->refreshRate);
+            fullscreen = true;
+        } else {
+            glfwSetWindowMonitor(window, nullptr, savedX, savedY, savedW, savedH, 0);
+            fullscreen = false;
+        }
+        glfwSwapInterval(1);
+    };
+    bool f11Down = false;
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
@@ -391,9 +374,7 @@ int main(int argc, char **argv)
     float speed = 1.f;
     float accum = 0.f;
     int sel_world = 0;
-    Recording rec;
     std::string status = "Ready";
-    std::vector<unsigned char> frame;
     double last = glfwGetTime();
     uint64_t stepCount = 0;
     std::vector<uint8_t> stateBuf;
@@ -441,6 +422,10 @@ int main(int argc, char **argv)
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+        bool f11 = glfwGetKey(window, GLFW_KEY_F11) == GLFW_PRESS;
+        if (f11 && !f11Down) toggleFullscreen();
+        f11Down = f11;
+        if (fullscreen && glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) toggleFullscreen();
 
         serveControlMode(rep, mgr, names);
 
@@ -531,20 +516,18 @@ int main(int argc, char **argv)
         }
         ImGui::Text("Zoom: %.0f%%", zm * 100.f);
         ImGui::Separator();
-        if (!rec.pipe) {
-            if (ImGui::Button("Record")) {
-                status = rec.start(kWinW, kWinH, sel_world)
-                    ? "Recording " + rec.path : "Could not start ffmpeg";
-            }
-        } else if (ImGui::Button("Stop recording")) {
-            rec.stop();
-            status = "Saved " + rec.path;
-        }
+        if (ImGui::Button(fullscreen ? "Exit full screen" : "Full screen")) toggleFullscreen();
+        ImGui::SameLine();
+        if (ImGui::Button("Minimise")) glfwIconifyWindow(window);
+        ImGui::TextDisabled("F11: full screen   Esc: leave full screen");
         ImGui::TextWrapped("%s", status.c_str());
         ImGui::End();
 
-        ImGui::SetNextWindowPos(ImVec2(300, 10), ImGuiCond_Once);
-        ImGui::SetNextWindowSize(ImVec2(kWinW - 310, kWinH - 20), ImGuiCond_Once);
+        // The map fills the rest of the window, so it grows with resize and full screen.
+        ImVec2 disp = ImGui::GetIO().DisplaySize;
+        ImGui::SetNextWindowPos(ImVec2(300, 10), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(std::max(200.f, disp.x - 310.f),
+                                        std::max(200.f, disp.y - 20.f)), ImGuiCond_Always);
         ImGui::Begin("Map", nullptr, ImGuiWindowFlags_NoCollapse);
         if (ImGui::BeginTabBar("worlds")) {
             for (uint32_t w = 0; w < nW; w++) {
@@ -665,11 +648,9 @@ int main(int argc, char **argv)
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-        if (rec.pipe) rec.writeFrame(fbw, fbh, frame);
         glfwSwapBuffers(window);
     }
 
-    rec.stop();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();

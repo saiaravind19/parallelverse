@@ -10,8 +10,8 @@ differential-drive circular robots, and is driven over ZeroMQ.
 - Layouts are CSV files, 1 m per cell ([docs/layout_rules.md](docs/layout_rules.md)).
 - Robots follow waypoints with a trapezoidal speed profile and stop on contact
   with a wall or another robot.
-- A top-down GUI shows one tab per world, with robot ids, and a Record button
-  that writes an MP4.
+- A top-down GUI shows one tab per world, with robot ids. The window can be
+  resized, and has Full screen (also F11) and Minimise buttons.
 - Robot state is published and waypoints are accepted over ZeroMQ with
   protobuf messages ([docs/communication.md](docs/communication.md)).
 - Python tools generate scenes and publish waypoints.
@@ -24,7 +24,7 @@ Ubuntu / Debian (x86_64):
 
 ```bash
 sudo apt update
-sudo apt install git cmake python3 ffmpeg \
+sudo apt install git cmake python3 \
     libglfw3-dev libgl1-mesa-dev \
     libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
     libzmq3-dev nlohmann-json3-dev
@@ -33,7 +33,7 @@ sudo apt install git cmake python3 ffmpeg \
 macOS (Homebrew):
 
 ```bash
-brew install cmake glfw zeromq nlohmann-json ffmpeg
+brew install cmake glfw zeromq nlohmann-json
 ```
 
 You do not need a C++ compiler or protobuf. Madrona downloads its own clang
