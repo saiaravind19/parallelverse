@@ -1,156 +1,83 @@
-# multi_world_sim
+# parallelverse
 
-The simulator app is called `parallelverse`.
+A 2D batch simulator for mobile-robot fleets: many independent worlds, each with
+up to hundreds of differential-drive robots, stepped together in one process.
 
-A 2D batch simulator for mobile-robot fleets, built on the
-[Madrona](https://github.com/shacklettbp/madrona) engine's ECS. Many worlds run
-in one process. Each world is loaded from a CSV layout, holds up to hundreds of
-differential-drive circular robots, and is driven over ZeroMQ.
+## Demo
 
-- Layouts are CSV files, 1 m per cell ([docs/layout_rules.md](docs/layout_rules.md)).
-- Robots follow waypoints with a trapezoidal speed profile and stop on contact
-  with a wall or another robot.
-- A top-down GUI shows one tab per world, with robot ids. The window can be
-  resized, and has Full screen (also F11) and Minimise buttons.
-- Robot state is published and waypoints are accepted over ZeroMQ with
-  protobuf messages ([docs/communication.md](docs/communication.md)).
-- Python tools generate scenes and publish waypoints.
+[![parallelverse demo](https://img.youtube.com/vi/JtwCn2WjRnU/maxresdefault.jpg)](https://youtu.be/JtwCn2WjRnU)
 
-## Setup
+*Click the image to watch the demo on YouTube.*
 
-### 1. Install the system packages
+## How it uses Madrona
 
-Ubuntu / Debian (x86_64):
+parallelverse is built on the [Madrona](https://github.com/shacklettbp/madrona)
+engine, which runs thousands of environments in one batch using an
+Entity Component System (ECS).
+
+- **Worlds** — each CSV layout becomes one Madrona world. All worlds are stepped
+  together by Madrona's executor (CPU thread pool today).
+- **Entities and components** — every robot is a `Robot` entity built from
+  components such as `RobotPose`, `RobotMotion`, `Path` and `WaypointCmd`.
+- **Systems in a task graph** — each step runs a fixed graph of systems:
+  spawn → control mode → waypoint commands → drive (trapezoidal profile) →
+  collision detect → collision resolve → status.
+- **Exported buffers** — component columns are exported as flat arrays, so the
+  manager reads robot state and writes commands for every world at once, and
+  the ZeroMQ bridge publishes and accepts them as protobuf messages.
+
+## How to use
+
+### Install
+
+Ubuntu / Debian:
 
 ```bash
-sudo apt update
-sudo apt install git cmake python3 \
-    libglfw3-dev libgl1-mesa-dev \
+sudo apt install git cmake python3 libglfw3-dev libgl1-mesa-dev \
     libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
     libzmq3-dev nlohmann-json3-dev
 ```
 
-macOS (Homebrew):
+macOS:
 
 ```bash
 brew install cmake glfw zeromq nlohmann-json
 ```
 
-You do not need a C++ compiler or protobuf. Madrona downloads its own clang
-toolchain the first time you run `cmake`, so the machine needs internet access
-to GitHub at that point. The message code uses nanopb, which is bundled in
-`third_party/nanopb`.
+Madrona downloads its own clang toolchain on the first `cmake` run (needs
+internet). Install [uv](https://docs.astral.sh/uv/) for the Python tools.
 
-For the Python tools, install [uv](https://docs.astral.sh/uv/).
-
-Linux ARM (aarch64) is not tested. The toolchain download is chosen by
-`uname -m`, and Madrona's architecture check may not recognise `aarch64`. If
-`cmake` fails there, please open an issue with the log.
-
-### 2. Get the code (with the Madrona submodule)
+### Build
 
 ```bash
 git clone --recursive https://github.com/saiaravind19/multi_world_sim.git
 cd multi_world_sim
-# if you cloned without --recursive:
-git submodule update --init --recursive
-```
-
-### 3. Build
-
-```bash
 cmake -S . -B build
 cmake --build build -j --target parallelverse
 ```
 
-Other targets: `sim2d_collision_test` (collision tests), `sim2d_bench`
-(headless speed test), `sim2d_map_check` (checks a layout).
-
-### 4. Capacity limits (build settings)
-
-Two table sizes are fixed when you configure:
-
-```bash
-cmake -S . -B build -DSIM2D_MAX_WAYPOINTS=64 -DSIM2D_MAX_MAP_DIM=128
-```
-
-`SIM2D_MAX_WAYPOINTS` is the longest path and `SIM2D_MAX_MAP_DIM` the largest
-map side in cells. The number of robots is not a build setting: you give it when
-you launch (below), and can add more while it runs.
-
-## Run
+### Run
 
 ```bash
 cd build
-./parallelverse ../scenes/sample.json
+./parallelverse ../scenes/sample.json                 # robots as listed in the scene
+./parallelverse ../scenes/sample.json --robots 300    # 300 robots per world
 ```
 
-Options:
-
-```bash
-./parallelverse ../scenes/sample.json --robots 300      # 300 robots in every world, placed for you
-./parallelverse ../scenes/sample.json --max-robots 300  # optional: cap the slots for more speed (default: every movable cell)
-```
-
-Slots per world come from `--max-robots`, else every movable cell; they never exceed the movable cells.
-
-A scene can also say `"robots": 40` instead of listing each robot. A world never
-holds more robots than its movable cells (cells with an arrow, or all free cells
-if the layout has no arrows). Add robots while it runs with the "Add robots"
-button, `uv run spawn_robots.py <world> --count 20`, or a `/cmd_spawn` message.
-
-In the map view, scroll to zoom around the cursor, drag to pan, and use Fit to
-reset.
-
-Robots take commands as waypoints (default) or velocities. Switch with
-`uv run set_control_mode.py <world> <robot> velocity`; see
-[docs/communication.md](docs/communication.md).
-
-On Linux with no display, run it under a virtual display:
-`xvfb-run -a ./parallelverse ../scenes/sample.json`.
-
-### Make a scene from a layout
+### Drive the robots
 
 ```bash
 cd tools
-uv run make_scene.py          # window: add several layouts, set robots per layout
-uv run make_scene.py --map a.csv:20 --map b.csv:50 --out fleet.json   # no window
+uv run make_scene.py                                  # build a scene from layouts
+uv run publish_waypoints.py 0 0 "2.5,9.5 5.5,9.5"     # world 0, robot 0
+uv run spawn_robots.py 0 --count 20                   # add robots while running
 ```
 
-See [docs/make_scene_guide.md](docs/make_scene_guide.md). For layouts with
-direction arrows, robots start only on lane cells, facing the lane direction.
-
-### Send waypoints
-
-```bash
-cd tools
-uv run publish_waypoints.py 0 0 "2.5,9.5 5.5,9.5"   # world 0, robot 0
-uv run publish_velocity.py 0 0 1.0 0.3 --hold 5      # velocity mode only
-```
-
-### Test
-
-```bash
-cd build
-./sim2d_collision_test
-./sim2d_bench 1 300 100      # worlds, robots per world, steps [robot slots]
-```
-
-## Layout
-
-```
-src/          simulator, manager, GUI app, tests, bench
-proto/        message definitions (nanopb options)
-gen/          generated nanopb code
-third_party/  nanopb runtime
-tools/        Python tools (uv)
-maps/ scenes/ example layouts and scenes
-docs/         layout rules, scene guide, communication
-external/     Madrona (git submodule)
-```
+More detail: [layout rules](docs/layout_rules.md),
+[scene guide](docs/make_scene_guide.md),
+[communication](docs/communication.md).
 
 ## Credits
 
-Built on [Madrona](https://github.com/shacklettbp/madrona). The repository
-started from Madrona's `madrona_escape_room` example for its build setup; see
-[LICENSE](LICENSE).
+Built on [Madrona](https://github.com/shacklettbp/madrona), starting from its
+`madrona_escape_room` example. See [LICENSE](LICENSE).
