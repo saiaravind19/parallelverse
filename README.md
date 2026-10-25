@@ -50,8 +50,8 @@ internet). Install [uv](https://docs.astral.sh/uv/) for the Python tools.
 ### Build
 
 ```bash
-git clone --recursive https://github.com/saiaravind19/multi_world_sim.git
-cd multi_world_sim
+git clone --recursive https://github.com/saiaravind19/parallelverse.git
+cd parallelverse
 cmake -S . -B build
 cmake --build build -j --target parallelverse
 ```
