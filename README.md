@@ -1,17 +1,17 @@
-# parallelverse
+# Parallelverse
 
 A 2D batch simulator for mobile-robot fleets: many independent worlds, each with
 up to hundreds of differential-drive robots, stepped together in one process.
 
 ## Demo
 
-[![parallelverse demo](https://img.youtube.com/vi/JtwCn2WjRnU/maxresdefault.jpg)](https://youtu.be/JtwCn2WjRnU)
+[![Parallelverse demo](https://img.youtube.com/vi/JtwCn2WjRnU/maxresdefault.jpg)](https://youtu.be/JtwCn2WjRnU)
 
 *Click the image to watch the demo on YouTube.*
 
 ## How it uses Madrona
 
-parallelverse is built on the [Madrona](https://github.com/shacklettbp/madrona)
+Parallelverse is built on the [Madrona](https://github.com/shacklettbp/madrona)
 engine, which runs thousands of environments in one batch using an
 Entity Component System (ECS).
 
